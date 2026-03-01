@@ -236,7 +236,8 @@ function getDashboardData() {
                     createdAt: row[12] ? new Date(row[12]).toLocaleString() : "",
                     lastUpdatedDate: row[13] ? new Date(row[13]).toLocaleString() : "",
                     comments: parsedComments,
-                    projectType: row[15] || "Other"
+                    projectType: row[15] || "Other",
+                    updates: parsedComments  // Use comments as update history
                 });
             }
         } catch (err) {
@@ -823,6 +824,24 @@ function updateProject(projectId, newStatus, newPercentage, updateNote) {
     // Update lastUpdatedText (column 12) if note provided
     if (updateNote) {
         projectSheet.getRange(projectRowIndex + 1, 12).setValue(updateNote);
+        
+        // ALSO add to comments array (column 15) so it shows in history
+        let currentComments = [];
+        try {
+            currentComments = JSON.parse(projectData[projectRowIndex][14] || "[]");
+        } catch (e) {
+            currentComments = [];
+        }
+        
+        const newEntry = {
+            user: email,
+            timestamp: timestamp,
+            text: updateNote
+        };
+        currentComments.push(newEntry);
+        
+        // Write updated comments to column 15
+        projectSheet.getRange(projectRowIndex + 1, 15).setValue(JSON.stringify(currentComments));
     }
     
     Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", %=" + newPercentage);

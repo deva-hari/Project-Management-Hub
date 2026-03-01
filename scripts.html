@@ -349,6 +349,7 @@
                         <td>
                             <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')" title="View Details">View</button>
                             <button class="btn btn-sm btn-outline-warning" onclick="openEditProjectModal('${escapeHtml(p.id)}')" title="Edit Project">Edit</button>
+                            <button class="btn btn-sm btn-outline-info" onclick="openProjectNotesModal('${escapeHtml(p.id)}')" title="View/Add Notes">📝 Notes</button>
                         </td>
                     </tr>
                 `;
@@ -479,7 +480,7 @@
             <div class="mb-3">
                 <h6 class="text-muted">Latest Update</h6>
                 <p class="small mb-1"><span class="text-muted">${escapeHtml(project.lastUpdatedDate)}</span></p>
-                <div class="alert alert-light border mb-0"><small>${escapeHtml(project.lastUpdatedText || "No updates yet.")}</small></div>
+                <div class="alert alert-light border mb-0"><small>${escapeHtml(getLatestProjectUpdate(project) || "No updates yet.")}</small></div>
             </div>
 
             <hr>
@@ -890,6 +891,47 @@
         openHistoryModal(historyArray);
     }
 
+    function openProjectNotesModal(projectId) {
+        appState.currentProjectId = projectId;
+        const project = appState.projects.find(p => p.id === projectId);
+        if (!project) {
+            showAlert("Project not found", "danger");
+            return;
+        }
+        
+        // Show a modal with existing notes and ability to add new ones
+        const container = document.getElementById("historyTimeline");
+        container.innerHTML = "";
+        
+        const historyArray = project.updates || [];
+        if (historyArray.length === 0) {
+            container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
+        } else {
+            [...historyArray].reverse().forEach(log => {
+                const date = new Date(log.timestamp).toLocaleString();
+                const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
+                container.innerHTML += `
+                  <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
+                    <div class="card-body py-2">
+                       <div class="d-flex justify-content-between align-items-center mb-1">
+                          <small class="fw-bold text-dark">${log.user}</small>
+                          <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                       </div>
+                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                    </div>
+                  </div>
+                `;
+            });
+        }
+        
+        // Update history modal title
+        const modal = document.getElementById("historyModal");
+        const title = modal.querySelector(".modal-title");
+        title.textContent = `${project.name} - Notes & History`;
+        
+        new bootstrap.Modal(modal).show();
+    }
+
     function toggleMetrics() {
         const metricsDiv = document.getElementById("rollupMetrics");
         const btn = document.getElementById("metricsToggleBtn");
@@ -904,6 +946,15 @@
             btn.textContent = "▶ Expand";
             btn.insertBefore(icon, btn.firstChild);
         }
+    }
+
+    function getLatestProjectUpdate(project) {
+        // Try to get the latest comment/update first
+        if (project.updates && project.updates.length > 0) {
+            const latest = project.updates[project.updates.length - 1];
+            return latest.text || project.lastUpdatedText || "No updates yet.";
+        }
+        return project.lastUpdatedText || "No updates yet.";
     }
 
     function showAlert(message, type) {

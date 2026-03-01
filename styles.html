@@ -110,81 +110,74 @@
 
     /* === MODALS === */
     /* Base modal layer */
-    .modal {
-        z-index: 1050;
-    }
-
+    /* === MODALS - Z-INDEX HIERARCHY === */
+    /* Backdrop/Fade (lowest) */
     .modal-backdrop {
-        z-index: 1040;
+        z-index: 1040 !important;
+        display: block !important;
+        opacity: 0.5;
     }
 
-    /* New/Edit Project Modal - accessible */
+    /* Base modal layer */
+    .modal {
+        z-index: 1041 !important;
+        pointer-events: auto !important;
+    }
+
+    /* Project Detail Modal (lowest among functional modals) */
+    #projectDetailModal {
+        z-index: 1050 !important;
+    }
+
+    /* New/Edit Project Modal */
     #projectModal {
-        z-index: 1060 !important;
-    }
-
-    #projectModal ~ .modal-backdrop {
-        z-index: 1059 !important;
+        z-index: 1055 !important;
     }
 
     /* Edit Project Modal */
     #editProjectModal {
-        z-index: 1060 !important;
-    }
-
-    #editProjectModal ~ .modal-backdrop {
-        z-index: 1059 !important;
+        z-index: 1055 !important;
     }
 
     /* New Action Modal */
     #actionModal {
-        z-index: 1060 !important;
-    }
-
-    #actionModal ~ .modal-backdrop {
-        z-index: 1059 !important;
-    }
-
-    /* Project Detail Modal - higher than standard */
-    #projectDetailModal {
-        z-index: 1070 !important;
-    }
-
-    #projectDetailModal ~ .modal-backdrop {
-        z-index: 1069 !important;
+        z-index: 1055 !important;
     }
 
     /* Project Comment Modal */
     #projectCommentModal {
-        z-index: 1075 !important;
-    }
-
-    #projectCommentModal ~ .modal-backdrop {
-        z-index: 1074 !important;
+        z-index: 1062 !important;
     }
 
     /* History Modal */
     #historyModal {
-        z-index: 1075 !important;
+        z-index: 1060 !important;
     }
 
-    #historyModal ~ .modal-backdrop {
-        z-index: 1074 !important;
-    }
-
-    /* Update Action Modal - highest */
+    /* Update Action Modal (highest) */
     #updateActionModal {
-        z-index: 1080 !important;
+        z-index: 1065 !important;
     }
 
-    #updateActionModal ~ .modal-backdrop {
-        z-index: 1079 !important;
+    /* All modals must be clickable */
+    .modal-dialog {
+        pointer-events: auto !important;
     }
 
     .modal-content {
+        pointer-events: auto !important;
         border: none;
         border-radius: 16px;
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    }
+
+    .modal-header, .modal-body, .modal-footer {
+        pointer-events: auto !important;
+    }
+
+    /* Button and form elements must be clickable */
+    .modal button, .modal input, .modal textarea, .modal select {
+        pointer-events: auto !important;
     }
 
     /* === METRICS COLLAPSE === */
