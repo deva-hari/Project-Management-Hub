@@ -659,7 +659,14 @@ function sendTaskAssignmentEmail(action) {
   `;
 
     try {
-        MailApp.sendEmail(action.owner, subject, body);
+        //MailApp.sendEmail(action.owner, subject, body);
+        MailApp.sendEmail({
+                to: action.owner,
+                name:     'Project Management System',     // this is the “from” name
+                replyTo:  'no-reply@example.com',   // replies will go here
+                subject: subject,
+                htmlBody: body
+            });
     } catch (e) {
         console.error("Failed to send email to: " + action.owner);
     }
@@ -762,6 +769,8 @@ function sendDailySummaryEmails() {
         try {
             MailApp.sendEmail({
                 to: userEmail,
+                name:     'Project Management System',     // this is the “from” name
+                replyTo:  'no-reply@example.com',   // replies will go here
                 subject: "Project Hub: Daily Wrap-Up",
                 htmlBody: emailHtml
             });
