@@ -199,6 +199,89 @@
         transition: transform 0.3s ease-in-out;
     }
 
+    /* === MODERN HEADERS === */
+    .navbar-brand {
+        font-size: 1.5rem;
+        background: var(--primary-gradient);
+        -webkit-background-clip: text;
+        color: transparent;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    }
+
+    #mainHeading {
+        font-size: 2.25rem;
+        background: var(--info-gradient);
+        -webkit-background-clip: text;
+        color: transparent;
+        text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    h5 {
+        background: var(--warning-gradient);
+        -webkit-background-clip: text;
+        color: transparent;
+    }
+
+    /* === PAGE / CONTAINER EFFECTS === */
+    .container {
+        backdrop-filter: blur(4px);
+        background: rgba(255,255,255,0.6);
+        padding: 2rem !important;
+        border-radius: 16px;
+    }
+
+    /* timeline cards look techy */
+    .timeline .card {
+        border-left: 4px solid var(--info-gradient);
+        background: rgba(255,255,255,0.85);
+    }
+
+    /* add some glow under key metric cards */
+    #rollupMetrics .card {
+        position: relative;
+    }
+    #rollupMetrics .card::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border-radius: 12px;
+        box-shadow: 0 0 20px rgba(13,110,253,0.4);
+        opacity: 0.2;
+        pointer-events: none;
+    }
+
+    /* subtle hover animations for buttons */
+    .btn:hover {
+        transform: translateY(-1px) scale(1.02);
+    }
+
+    /* misc improvements for techy look */
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        color: #222;
+    }
+
+    /* header bar behind main heading */
+    .header-bar {
+        padding: 1rem 1.5rem;
+        background: rgba(255,255,255,0.2);
+        border-radius: 12px;
+        backdrop-filter: blur(8px);
+    }
+
+    /* scrollbar styling for modern feel */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: rgba(0,0,0,0.2);
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-track {
+        background: rgba(0,0,0,0.05);
+    }
+
     #rollupMetrics.collapsed ~ #metricsToggleBtn #metricsToggleIcon {
         transform: rotate(-180deg);
     }

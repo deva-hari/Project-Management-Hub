@@ -35,6 +35,18 @@
         // Admin Form Listeners
         document.getElementById("addUserForm").addEventListener("submit", handleSaveUser);
         document.getElementById("addSettingForm").addEventListener("submit", handleSaveSetting);
+
+        // Wire up project -> assigned owner auto-refresh in action modal
+        const projSelect = document.getElementById("aProjectSelect");
+        if (projSelect) {
+            projSelect.addEventListener('change', () => updateAssignedTo());
+        }
+
+        // When the action modal is shown, refresh assigned owner display
+        const actionModalEl = document.getElementById('actionModal');
+        if (actionModalEl) {
+            actionModalEl.addEventListener('show.bs.modal', () => updateAssignedTo());
+        }
     });
 
     // --- API Calls ---
@@ -177,6 +189,16 @@
         if (appState.role === "Admin") {
             document.getElementById("btnAdminPanel").classList.remove("d-none");
         }
+
+        // Owner filter only for Managers and Admins
+        const ownerContainer = document.getElementById('ownerFilterContainer');
+        if (ownerContainer) {
+            if (appState.role === 'Admin' || appState.role === 'Manager') {
+                ownerContainer.classList.remove('d-none');
+            } else {
+                ownerContainer.classList.add('d-none');
+            }
+        }
     }
 
     function populateDropdowns() {
@@ -198,8 +220,36 @@
         fill('filterStatus', ["All", ...(appState.settings.statuses || [])]);
         fill('uStatus', appState.settings.statuses || []);
         
+        // Populate owner filter if visible
+        populateOwnerFilter();
+
         // Populate assignee dropdown
         populateAssigneeDropdown();
+    }
+
+    // Build list of unique project owners for the dashboard filter
+    function populateOwnerFilter() {
+        const ownerSelect = document.getElementById('filterOwner');
+        if (!ownerSelect) return;
+
+        const previous = ownerSelect.value;
+        // Assemble unique owner emails from projects the user can see
+        const owners = [...new Set(appState.projects.map(p => p.owner).filter(o => o))];
+        owners.sort((a, b) => a.localeCompare(b));
+
+        // Try to resolve to friendly names using the global users list
+        const options = owners.map(o => {
+            const user = (window.allUsers || []).find(u => u.email === o);
+            const display = user && user.name ? `${user.name} (${o})` : o;
+            return `<option value="${o}">${escapeHtml(display)}</option>`;
+        });
+
+        ownerSelect.innerHTML = `<option value="All">All Owners</option>` + options.join('');
+        if (previous && owners.includes(previous)) {
+            ownerSelect.value = previous;
+        } else {
+            ownerSelect.value = "All";
+        }
     }
 
     function populateAssigneeDropdown() {
@@ -216,7 +266,7 @@
         if (!dropdownList) return;
 
         dropdownList.innerHTML = users.map(user => `
-            <a class="dropdown-item" href="#" onclick="selectAssignee('${escapeHtml(user.email)}', '${escapeHtml(user.name || user.email)}')">
+            <a class="dropdown-item" href="#" onclick="selectAssignee('${escapeHtml(user.email)}', '${escapeHtml(user.name || user.email)}'); return false;">
                 <strong>${escapeHtml(user.name || user.email)}</strong>
                 <br><small class="text-muted">${escapeHtml(user.email)}</small>
             </a>
@@ -285,6 +335,9 @@
         filteredProjects.forEach(p => {
             select.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`;
         });
+
+        // Refresh assigned-to display after populating projects
+        updateAssignedTo();
 
         // Always render grouped list view
         renderProjectsList(filteredProjects, grid);
@@ -366,6 +419,31 @@
         });
 
         grid.innerHTML = html;
+    }
+
+    // Set the Assigned To display in the Action modal to the selected project's owner
+    function updateAssignedTo() {
+        const select = document.getElementById('aProjectSelect');
+        const assignedDisplay = document.getElementById('aAssignedTo');
+        const assignedEmail = document.getElementById('aAssignedToEmail');
+        if (!select || !assignedDisplay || !assignedEmail) return;
+
+        const projId = select.value;
+        if (!projId) {
+            assignedDisplay.textContent = 'Not selected';
+            assignedEmail.value = '';
+            return;
+        }
+
+        const proj = appState.projects.find(p => p.id === projId);
+        if (!proj) {
+            assignedDisplay.textContent = 'Project owner not found';
+            assignedEmail.value = '';
+            return;
+        }
+
+        assignedDisplay.textContent = proj.owner || 'No owner';
+        assignedEmail.value = proj.owner || '';
     }
 
     function renderProjectsGrouped(projects, grid) {
@@ -572,11 +650,16 @@
     // --- Filter Handlers ---
     function passesFilters(item) {
         const statusFilter = document.getElementById("filterStatus").value;
+        const ownerFilterEl = document.getElementById("filterOwner");
+        const ownerFilter = ownerFilterEl ? ownerFilterEl.value : "All";
         const dateFrom = document.getElementById("filterDateFrom").value;
         const dateTo = document.getElementById("filterDateTo").value;
 
         // 1. Status Filter
         if (statusFilter !== "All" && item.status !== statusFilter) return false;
+
+        // 1b. Owner Filter (only applies if user selected one)
+        if (ownerFilter && ownerFilter !== "All" && item.owner !== ownerFilter) return false;
 
         // 2. Date Filter
         if (dateFrom || dateTo) {
@@ -595,6 +678,8 @@
 
     function clearFilters() {
         document.getElementById("filterStatus").value = "All";
+        const ownerEl = document.getElementById("filterOwner");
+        if (ownerEl) ownerEl.value = "All";
         document.getElementById("filterDateFrom").value = "";
         document.getElementById("filterDateTo").value = "";
         applyFilters();
@@ -675,8 +760,8 @@
 
         const projId = document.getElementById("aProjectSelect").value;
         const desc = document.getElementById("aDesc").value.trim();
-        const assignee = document.getElementById("aAssignee").value.trim();
 
+        // Use project owner as assignee; client no longer collects assignee email
         // FIXED: Add input validation
         if (!projId) {
             showAlert("Please select a project", "danger");
@@ -684,10 +769,6 @@
         }
         if (!desc) {
             showAlert("Task description is required", "danger");
-            return;
-        }
-        if (!assignee || !assignee.includes("@")) {
-            showAlert("Valid assignee email is required", "danger");
             return;
         }
 
@@ -711,7 +792,8 @@
                 btn.disabled = false;
                 btn.innerHTML = "Assign Action";
             })
-            .createAction(projId, desc, assignee, priority);
+            // pass empty assignee; server will assign the project's owner
+            .createAction(projId, desc, "", priority);
     }
 
     function openUpdateModal(actionId, currentStatus, currentPct) {
@@ -767,6 +849,14 @@
         new bootstrap.Modal(document.getElementById('projectCommentModal')).show();
     }
 
+    // helper to convert localized date string to yyyy-mm-dd
+    function localDateToInput(value) {
+        if (!value) return "";
+        const d = new Date(value);
+        if (isNaN(d)) return "";
+        return d.toISOString().split('T')[0];
+    }
+
     function openEditProjectModal(projectId) {
         const project = appState.projects.find(p => p.id === projectId);
         if (!project) {
@@ -779,6 +869,9 @@
         document.getElementById("editProjectStatus").value = project.status;
         document.getElementById("editProjectPercentage").value = project.percentageCompleted || 0;
         document.getElementById("editProjectNote").value = "";
+        // populate optional dates
+        document.getElementById("editProjectStart").value = localDateToInput(project.startDate);
+        document.getElementById("editProjectDeadline").value = localDateToInput(project.deadline);
 
         new bootstrap.Modal(document.getElementById('editProjectModal')).show();
     }
@@ -792,6 +885,8 @@
         const projectId = document.getElementById("editProjectId").value;
         const status = document.getElementById("editProjectStatus").value;
         const percentage = parseInt(document.getElementById("editProjectPercentage").value) || 0;
+        const startDate = document.getElementById("editProjectStart").value || null;
+        const deadline = document.getElementById("editProjectDeadline").value || null;
         const note = document.getElementById("editProjectNote").value.trim();
 
         google.script.run
@@ -808,7 +903,7 @@
                 btn.disabled = false;
                 btn.innerHTML = "Save Changes";
             })
-            .updateProject(projectId, status, percentage, note);
+            .updateProject(projectId, status, percentage, note, startDate, deadline);
     }
 
     function handleProjectCommentSubmit(e) {

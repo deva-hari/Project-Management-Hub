@@ -33,7 +33,7 @@
     <div id="alertContainer" class="mb-3"></div>
 
     <!-- Header Actions -->
-    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2 header-bar">
       <h2 id="mainHeading">Dashboard</h2>
       <div id="mainActions" class="d-flex gap-2 flex-wrap">
 
@@ -217,7 +217,7 @@
     <div class="card mb-4 shadow-sm">
       <div class="card-body">
         <div class="row align-items-end g-3">
-          <div class="col-md-4">
+          <div class="col-md-3">
             <label class="form-label fw-bold">Filter Status</label>
             <select class="form-select" id="filterStatus" onchange="applyFilters()">
               <option value="All">All Statuses</option>
@@ -227,11 +227,17 @@
               <option value="Blocked">Blocked</option>
             </select>
           </div>
-          <div class="col-md-3">
+          <div class="col-md-3 d-none" id="ownerFilterContainer">
+            <label class="form-label fw-bold">Filter Owner</label>
+            <select class="form-select" id="filterOwner" onchange="applyFilters()">
+              <option value="All">All Owners</option>
+            </select>
+          </div>
+          <div class="col-md-2">
             <label class="form-label fw-bold">Updated From</label>
             <input type="date" class="form-control" id="filterDateFrom" onchange="applyFilters()">
           </div>
-          <div class="col-md-3">
+          <div class="col-md-2">
             <label class="form-label fw-bold">Updated To</label>
             <input type="date" class="form-control" id="filterDateTo" onchange="applyFilters()">
           </div>
@@ -459,6 +465,17 @@
               </div>
             </div>
 
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label fw-bold">From</label>
+                <input type="date" class="form-control" id="editProjectStart">
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label fw-bold">To</label>
+                <input type="date" class="form-control" id="editProjectDeadline">
+              </div>
+            </div>
+
             <div class="mb-3">
               <label class="form-label fw-bold">Update Note</label>
               <textarea class="form-control" id="editProjectNote" rows="3" placeholder="What changed? (optional)"></textarea>
@@ -495,16 +512,10 @@
               <textarea class="form-control" id="aDesc" rows="2" required></textarea>
             </div>
             <div class="mb-3">
-              <label class="form-label fw-bold">Assignee Email</label>
-              <div class="input-group">
-                <input type="text" class="form-control" id="aAssigneeSearch" placeholder="Search assignee..." autocomplete="off">
-                <button class="btn btn-outline-secondary" type="button" id="aAssigneeDropdown">▼</button>
-              </div>
-              <input type="hidden" id="aAssignee" required>
-              <div id="aAssigneeDropdownList" class="dropdown-menu w-100" style="position: absolute; z-index: 1000; max-height: 200px; overflow-y: auto; display: none;">
-                <!-- Populated via JS -->
-              </div>
-              <small class="text-muted d-block mt-1">Selected: <span id="aAssigneeSelected">None</span></small>
+              <label class="form-label fw-bold">Assigned To</label>
+              <div class="form-control-plaintext" id="aAssignedTo">Not selected</div>
+              <input type="hidden" id="aAssignedToEmail">
+              <small class="text-muted d-block mt-1">Assigned to project owner by default.</small>
             </div>
             <div class="mb-3">
               <label class="form-label fw-bold">Priority</label>

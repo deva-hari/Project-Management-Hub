@@ -496,11 +496,27 @@ function createAction(projectId, desc, actionOwner, priority) {
     const newId = generateId("ACT");
     const timestamp = new Date().toISOString();
 
+    // Determine the actual assignee: the owner of the linked project
+    const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const projData = projectSheet.getDataRange().getValues();
+    let projectOwner = null;
+    for (let i = 1; i < projData.length; i++) {
+        if (projData[i][0] === projectId) {
+            projectOwner = projData[i][2];
+            break;
+        }
+    }
+    if (!projectOwner) {
+        throw new Error("Project not found or has no owner: " + projectId);
+    }
+
+    actionOwner = projectOwner; // override any passed value
+
     const initialLog = [{
         user: email,
         timestamp: timestamp,
         status: "Pending",
-        text: "Action created and assigned."
+        text: "Action created and assigned to project owner."
     }];
 
     sheet.appendRow([
@@ -662,13 +678,17 @@ function sendTaskAssignmentEmail(action) {
         //MailApp.sendEmail(action.owner, subject, body);
         MailApp.sendEmail({
                 to: action.owner,
-                name:     'Project Management System',     // this is the “from” name
-                replyTo:  'no-reply@example.com',   // replies will go here
+                name: 'Project Management System',     // this is the “from” name
+                replyTo: 'no-reply@example.com',   // replies will go here
                 subject: subject,
-                htmlBody: body
+                body: body
             });
     } catch (e) {
-        console.error("Failed to send email to: " + action.owner);
+        // Log full error and rethrow so caller / execution logs show the failure
+        Logger.log('sendTaskAssignmentEmail: attempting to send to: %s', action.owner);
+        Logger.log('sendTaskAssignmentEmail: error: %s', e && e.toString ? e.toString() : JSON.stringify(e));
+        // Surface the error so google.script.run.withFailureHandler() can receive it
+        throw new Error('Failed to send assignment email to ' + action.owner + ': ' + (e && e.message ? e.message : JSON.stringify(e)));
     }
 }
 
@@ -769,7 +789,7 @@ function sendDailySummaryEmails() {
         try {
             MailApp.sendEmail({
                 to: userEmail,
-                name:     'Project Management System',     // this is the “from” name
+                name:     'Project Management System',     // this is the “from” name
                 replyTo:  'no-reply@example.com',   // replies will go here
                 subject: "Project Hub: Daily Wrap-Up",
                 htmlBody: emailHtml
@@ -781,7 +801,7 @@ function sendDailySummaryEmails() {
 }
 
 // --- UPDATE PROJECT ---
-function updateProject(projectId, newStatus, newPercentage, updateNote) {
+function updateProject(projectId, newStatus, newPercentage, updateNote, newStart, newDeadline) {
     const email = Session.getActiveUser().getEmail();
     const role = getUserRole(email);
     
@@ -827,6 +847,14 @@ function updateProject(projectId, newStatus, newPercentage, updateNote) {
         projectSheet.getRange(projectRowIndex + 1, 7).setValue(parseInt(newPercentage) || 0);
     }
     
+    // optional date updates
+    if (newStart !== undefined && newStart !== null) {
+        projectSheet.getRange(projectRowIndex + 1, 8).setValue(newStart);
+    }
+    if (newDeadline !== undefined && newDeadline !== null) {
+        projectSheet.getRange(projectRowIndex + 1, 9).setValue(newDeadline);
+    }
+    
     // Update lastUpdatedDate (column 14)
     projectSheet.getRange(projectRowIndex + 1, 14).setValue(timestamp);
     
@@ -853,7 +881,7 @@ function updateProject(projectId, newStatus, newPercentage, updateNote) {
         projectSheet.getRange(projectRowIndex + 1, 15).setValue(JSON.stringify(currentComments));
     }
     
-    Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", %=" + newPercentage);
+    Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", %=" + newPercentage + ", start=" + newStart + ", deadline=" + newDeadline);
     
     return "Project updated successfully";
 }
