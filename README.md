@@ -51,7 +51,204 @@ Central directory mapping emails to permissions.
 
 ---
 
-## 🚀 Development & Setup Guide
+## 🚀 Installation & Setup Guide (Step-by-Step for New Users)
+
+### Prerequisites
+- A Google Workspace or standard Google account
+- Access to Google Drive, Google Sheets, and Google Apps Script
+- (Optional) [Clasp](https://github.com/google/clasp) installed for local development
+
+---
+
+### Step 1: Create the Google Sheet Database
+
+1. **Create a new Google Sheet**:
+   - Go to [Google Drive](https://drive.google.com)
+   - Click `+ Create` → `Google Sheets` → `Blank spreadsheet`
+   - Name it: **"Project Management Hub Database"**
+
+2. **Set up the three required sheets**:
+   - Delete the default "Sheet1" tab
+   - Create three new tabs by right-clicking the sheet tab area and selecting "Insert Sheet"
+   - Name them exactly:
+     - `Projects`
+     - `Actions`
+     - `Users`
+
+3. **Configure the Projects sheet**:
+   - Click the `Projects` tab
+   - In row 1, add these column headers (A to I):
+     - `ProjectID`, `Name`, `OwnerEmail`, `ManagerEmail`, `Status`, `Phase`, `StartDate`, `Deadline`, `PercentageCompleted`, `LastUpdatedDate`, `LastUpdatedText`, `BusinessOutcomes`, `KeyRisks`, `Updates`
+
+4. **Configure the Actions sheet**:
+   - Click the `Actions` tab
+   - In row 1, add these column headers (A to J):
+     - `ActionID`, `ProjectID`, `Description`, `ActionOwnerEmail`, `Status`, `Priority`, `PercentageCompleted`, `Deadline`, `Updates`
+
+5. **Configure the Users sheet**:
+   - Click the `Users` tab
+   - In row 1, add these column headers (A to D):
+     - `Email`, `Name`, `Role`, `Department`
+   - Add at least one user (your email):
+     - Example: `your.email@company.com` | `Your Name` | `Admin` | `IT`
+     - Roles can be: `Admin`, `ProjectOwner`, `Manager`, or `ActionOwner`
+
+---
+
+### Step 2: Create the Google Apps Script Project
+
+1. **Open Apps Script editor**:
+   - In your newly created Google Sheet, click `Extensions` → `Apps Script`
+   - This will open the Apps Script editor in a new tab
+
+2. **Copy the code files**:
+   - You'll need three files: `Code.gs`, and HTML/CSS/JS files
+   - In the Apps Script editor, create files as follows:
+
+   **Step 2a: Create `Code.gs`** (Backend Logic)
+   - In the left panel, click `+ New` → `File`
+   - Name it: `Code.gs`
+   - Copy and paste the entire contents of the `Code.js` file from this repository
+   - Save (Ctrl+S)
+
+   **Step 2b: Create HTML/CSS/JS files** (Frontend UI)
+   - Create a file named `index.html`
+   - Copy contents from the repository's `index.html`
+   - Create a file named `styles.html`
+   - Copy contents from the repository's `styles.html`
+   - Create a file named `scripts.html`
+   - Copy contents from the repository's `scripts.html`
+   - Create a file named `appsscript.json`
+   - Copy contents from the repository's `appsscript.json`
+   - Save all files (Ctrl+S)
+
+3. **Update the Sheet ID in Code.gs**:
+   - In your Google Sheet, look at the URL: `https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit`
+   - Copy the `{SHEET_ID}` part
+   - In the Apps Script editor, find the line that looks like:
+     ```javascript
+     const SHEET_ID = "your-sheet-id-here";
+     ```
+   - Replace `"your-sheet-id-here"` with your actual Sheet ID (keep the quotes)
+   - Save
+
+---
+
+### Step 3: Deploy as a Web App
+
+1. **Create a deployment**:
+   - In the Apps Script editor, click the `Deploy` button (top right, next to `+ New`)
+   - Select `New deployment`
+
+2. **Configure deployment settings**:
+   - Click the dropdown and select `Web app`
+   - **Execute as**: Select your Google account (appears as your email)
+   - **Who has access**: 
+     - For testing: Select `Only myself`
+     - For production: Select `Anyone with a Google account` or restrict to your Google Workspace domain
+   - Click `Deploy`
+
+3. **Grant permissions**:
+   - A popup may ask for Google permissions
+   - Click `Review permissions` → `Select your account` → `Allow`
+   - You'll see a message: "New deployment created successfully"
+
+4. **Copy the Web App URL**:
+   - A link starting with `https://script.google.com/macros/d/...` will appear
+   - Copy this URL and save it somewhere (this is your app URL)
+
+---
+
+### Step 4: Test the Installation
+
+1. **Open the web app**:
+   - Paste the deployment URL into a new browser tab
+   - You should see the Project Management Hub dashboard
+
+2. **Initial setup test**:
+   - Check if you can see the dashboard
+   - If you see an error, check the browser console (F12 → Console tab) for error messages
+
+3. **Add sample data**:
+   - Return to your Google Sheet
+   - Click the `Projects` tab
+   - Add a sample project in row 2:
+     - `ProjectID`: `P001`
+     - `Name`: `Test Project`
+     - `OwnerEmail`: Your email address
+     - `Status`: `Planning`
+     - And fill in other fields as needed
+   - Refresh the web app to see the project appear
+
+---
+
+### Step 5: Add Users (Critical Step)
+
+1. **Open the Users sheet** in your Google Sheet
+2. **Add all users who will access the app**:
+   - Each row should have: `Email`, `Name`, `Role`, `Department`
+   - **Roles**:
+     - `Admin`: Full system access
+     - `ProjectOwner`: Can create/edit projects and assign actions
+     - `Manager`: Read-only access to projects in their department
+     - `ActionOwner`: Can only view and update their assigned actions
+
+   **Example**:
+   ```
+   Email                    | Name           | Role         | Department
+   admin@company.com        | Admin User     | Admin        | IT
+   john.owner@company.com   | John Owner     | ProjectOwner | Engineering
+   jane.manager@company.com | Jane Manager   | Manager      | Engineering
+   ```
+
+---
+
+### Step 6: Ongoing Management
+
+**To update the app code**:
+1. Return to the Apps Script editor
+2. Edit the files as needed
+3. Save (Ctrl+S)
+4. Click `Deploy` → `Manage deployments`
+5. Click the edit icon (pencil) on your web app deployment
+6. Change the version or make other edits, then save
+7. Users will see the updated version on refresh
+
+**To add new users**:
+- Simply add rows to the `Users` sheet
+- They'll have access once their email is in the system
+
+**To modify project/action data**:
+- Edit directly in the Google Sheets tabs
+- Changes appear in the app after a refresh
+
+---
+
+### Troubleshooting
+
+**"Error: Cannot read properties of undefined"**
+- Make sure the Sheet ID in `Code.gs` matches your actual Google Sheet ID
+- Verify all three sheets (`Projects`, `Actions`, `Users`) exist with correct names
+- Check that column headers are exactly as specified above
+
+**Web app shows blank page**
+- Open browser console (F12) to see error messages
+- Click the Apps Script deployment link and re-authorize permissions
+- Check that `index.html` contains the full HTML structure
+
+**Users can't see projects**
+- Verify their email is in the `Users` sheet
+- Check the `ManagerEmail` or `OwnerEmail` fields match exactly (case-sensitive)
+- Ensure their `Role` is set correctly
+
+**Can't deploy as web app**
+- Make sure you have a Google Workspace account or standard Google account
+- Try going to `Extensions > Apps Script` from within the Google Sheet
+- Ensure all code files are properly saved before deploying
+
+---
+
+### Development & Setup Guide
 
 ### Prerequisites
 1. A Google Workspace or standard Google account.
