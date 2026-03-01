@@ -458,7 +458,7 @@ function generateId(prefix) {
     return prefix + "-" + Math.random().toString(36).substr(2, 6).toUpperCase();
 }
 
-function createProject(name, startDate, deadline, phase, projType, outcomes = "", risks = "") {
+function createProject(name, startDate, deadline, status, phase, projType, outcomes = "", risks = "") {
     const email = Session.getActiveUser().getEmail();
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -466,13 +466,17 @@ function createProject(name, startDate, deadline, phase, projType, outcomes = ""
     const newId = generateId("PRJ");
     const timestamp = new Date().toISOString();
 
+    // fall back to defaults if caller didn't provide
+    status = status || "Not Started";
+    phase = phase || "Open";
+
     sheet.appendRow([
         newId,
         name,
         email,
         "", // Manager field - no longer used, role-based access from Users sheet
-        "Not Started", // Status defaults here
-        phase || "Open",
+        status,
+        phase,
         0, // percentage completed
         startDate,
         deadline,
@@ -809,7 +813,7 @@ function sendDailySummaryEmails() {
 }
 
 // --- UPDATE PROJECT ---
-function updateProject(projectId, newStatus, newPercentage, updateNote, newStart, newDeadline) {
+function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote, newStart, newDeadline) {
     const email = Session.getActiveUser().getEmail();
     const role = getUserRole(email);
     
@@ -851,6 +855,10 @@ function updateProject(projectId, newStatus, newPercentage, updateNote, newStart
         projectSheet.getRange(projectRowIndex + 1, 5).setValue(newStatus);
     }
     
+    if (newPhase) {
+        projectSheet.getRange(projectRowIndex + 1, 6).setValue(newPhase);
+    }
+    
     if (newPercentage !== undefined && newPercentage !== null) {
         projectSheet.getRange(projectRowIndex + 1, 7).setValue(parseInt(newPercentage) || 0);
     }
@@ -889,7 +897,7 @@ function updateProject(projectId, newStatus, newPercentage, updateNote, newStart
         projectSheet.getRange(projectRowIndex + 1, 15).setValue(JSON.stringify(currentComments));
     }
     
-    Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", %=" + newPercentage + ", start=" + newStart + ", deadline=" + newDeadline);
+    Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", Phase=" + newPhase + ", %=" + newPercentage + ", start=" + newStart + ", deadline=" + newDeadline);
     
     return "Project updated successfully";
 }

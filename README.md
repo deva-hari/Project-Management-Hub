@@ -17,6 +17,7 @@ A lightweight, secure, and dynamic Project Management tool built entirely on Goo
 ### 2. Real-Time Dynamic Dashboard
 
 - The web interface dynamically filters and renders project and action data based precisely on the logged-in user's email and role.
+- Dashboard filters can now operate on both **status** and **phase**; both values are driven from the `Settings` sheet for consistency.
 - Single-page application (SPA) feel, utilizing asynchronous `google.script.run` calls to fetch and save data without page reloads.
 
 ### 3. Workflow Automation
@@ -48,7 +49,7 @@ A quick reference to some of the key server‑side routines you’ll find in `Co
 - `initializeDatabase()` – one‑time utility that creates/clears the four sheets (`Projects`, `Actions`, `Users`, `Settings`), sets header formatting, seeds default dropdown values (project types, statuses, phases), and writes the current session user as an Admin in `Users`.
 - `getDashboardData()` – the main read endpoint used by the frontend. It applies role‑based filters, builds downstream employee chains, parses JSON logs, and returns projects, actions, metrics, and settings to render the UI.
 - CRUD operations:
-  - `createProject(...)`, `updateProject(...)` – handle project creation and status/percentage/date updates with authorization checks.
+  - `createProject(...)`, `updateProject(...)` – handle project creation (now accepting an initial status and phase) and status/phase/percentage/date updates with authorization checks. UI dropdowns for status and phase are driven by the `Settings` sheet so that admins can define new values.
   - `createAction(...)`, `updateActionStatus(...)` – actions are always assigned to the owning project’s owner; update routines append JSON logs and send assignment emails.
   - Admin-only deletion helpers: `deleteProject(...)`, `deleteAction(...)`, `deleteProjectComment(...)`.
 - Notification helpers:

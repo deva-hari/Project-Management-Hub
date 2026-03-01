@@ -217,14 +217,16 @@
     <div class="card mb-4 shadow-sm">
       <div class="card-body">
         <div class="row align-items-end g-3">
-          <div class="col-md-3">
+          <div class="col-md-2">
             <label class="form-label fw-bold">Filter Status</label>
             <select class="form-select" id="filterStatus" onchange="applyFilters()">
               <option value="All">All Statuses</option>
-              <option value="Pending">Pending</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Completed">Completed</option>
-              <option value="Blocked">Blocked</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label fw-bold">Filter Phase</label>
+            <select class="form-select" id="filterPhase" onchange="applyFilters()">
+              <option value="All">All Phases</option>
             </select>
           </div>
           <div class="col-md-3 d-none" id="ownerFilterContainer">
@@ -387,13 +389,17 @@
           </div>
           <div class="modal-body">
             <div class="row">
-              <div class="col-md-8 mb-3">
+              <div class="col-md-6 mb-3">
                 <label class="form-label fw-bold">Project Name</label>
                 <input type="text" class="form-control" id="pName" required>
               </div>
-              <div class="col-md-4 mb-3">
+              <div class="col-md-3 mb-3">
                 <label class="form-label fw-bold">Project Type</label>
                 <select class="form-select" id="pType"></select>
+              </div>
+              <div class="col-md-3 mb-3">
+                <label class="form-label fw-bold">Status</label>
+                <select class="form-select" id="pStatus"></select>
               </div>
             </div>
 
@@ -448,18 +454,15 @@
             </div>
             
             <div class="row">
-              <div class="col-md-6 mb-3">
+              <div class="col-md-4 mb-3">
                 <label class="form-label fw-bold">Status</label>
-                <select class="form-select" id="editProjectStatus" required>
-                  <option value="">Select Status...</option>
-                  <option value="Pending">Pending</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="On Hold">On Hold</option>
-                  <option value="Completed">Completed</option>
-                  <option value="Closure">Closure</option>
-                </select>
+                <select class="form-select" id="editProjectStatus" required></select>
               </div>
-              <div class="col-md-6 mb-3">
+              <div class="col-md-4 mb-3">
+                <label class="form-label fw-bold">Phase</label>
+                <select class="form-select" id="editProjectPhase"></select>
+              </div>
+              <div class="col-md-4 mb-3">
                 <label class="form-label fw-bold">Completion %</label>
                 <input type="number" class="form-control" id="editProjectPercentage" min="0" max="100" required>
               </div>
@@ -519,6 +522,10 @@
               <small class="text-muted d-block mt-1">Assigned to project owner by default.</small>
             </div>
             <div class="mb-3">
+              <label class="form-label fw-bold">Project Phase</label>
+              <div class="form-control-plaintext" id="aProjectPhase">-</div>
+            </div>
+            <div class="mb-3">
               <label class="form-label fw-bold">Priority</label>
               <select class="form-select" id="aPriority" required>
                 <option value="Low">Low</option>
@@ -550,12 +557,7 @@
           <div class="modal-body">
             <div class="mb-3">
               <label class="form-label fw-bold">Status</label>
-              <select class="form-select" id="uStatus" required>
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Blocked">Blocked</option>
-                <option value="Completed">Completed</option>
-              </select>
+              <select class="form-select" id="uStatus" required></select>
             </div>
             <div class="mb-3">
               <label class="form-label fw-bold">Update Note</label>

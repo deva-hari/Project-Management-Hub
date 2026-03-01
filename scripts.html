@@ -216,9 +216,13 @@
         };
 
         fill('pType', appState.settings.projectTypes || []);
+        fill('pStatus', appState.settings.statuses || []);
         fill('pPhase', appState.settings.phases || []);
         fill('filterStatus', ["All", ...(appState.settings.statuses || [])]);
+        fill('filterPhase', ["All", ...(appState.settings.phases || [])]);
         fill('uStatus', appState.settings.statuses || []);
+        fill('editProjectStatus', appState.settings.statuses || []);
+        fill('editProjectPhase', appState.settings.phases || []);
         
         // Populate owner filter if visible
         populateOwnerFilter();
@@ -439,11 +443,15 @@
         if (!proj) {
             assignedDisplay.textContent = 'Project owner not found';
             assignedEmail.value = '';
+            const phaseEl = document.getElementById('aProjectPhase');
+            if (phaseEl) phaseEl.textContent = '-';
             return;
         }
 
         assignedDisplay.textContent = proj.owner || 'No owner';
         assignedEmail.value = proj.owner || '';
+        const phaseEl = document.getElementById('aProjectPhase');
+        if (phaseEl) phaseEl.textContent = proj.phase || '-';
     }
 
     function renderProjectsGrouped(projects, grid) {
@@ -638,7 +646,15 @@
         const projActions = appState.actions.filter(a => a.projectId === projectId);
         if (projActions.length === 0) return "<small class='text-muted'>No actions assigned yet.</small>";
 
-        let html = "<ul class='list-group list-group-flush small'>";
+        const proj = appState.projects.find(p => p.id === projectId) || {};
+        const projPhase = proj.phase || '';
+
+        let html = "";
+        if (projPhase) {
+            html += `<div class="mb-2"><small class="text-muted">Project Phase:</small> <strong>${escapeHtml(projPhase)}</strong></div>`;
+        }
+
+        html += "<ul class='list-group list-group-flush small'>";
         projActions.forEach(a => {
             const badgeStyle = getStatusBadge(a.status);
             html += `
@@ -662,6 +678,7 @@
     // --- Filter Handlers ---
     function passesFilters(item) {
         const statusFilter = document.getElementById("filterStatus").value;
+        const phaseFilter = document.getElementById("filterPhase").value;
         const ownerFilterEl = document.getElementById("filterOwner");
         const ownerFilter = ownerFilterEl ? ownerFilterEl.value : "All";
         const dateFrom = document.getElementById("filterDateFrom").value;
@@ -670,7 +687,10 @@
         // 1. Status Filter
         if (statusFilter !== "All" && item.status !== statusFilter) return false;
 
-        // 1b. Owner Filter (only applies if user selected one)
+        // 1.b Phase Filter
+        if (phaseFilter !== "All" && item.phase !== phaseFilter) return false;
+
+        // 1c. Owner Filter (only applies if user selected one)
         if (ownerFilter && ownerFilter !== "All" && item.owner !== ownerFilter) return false;
 
         // 2. Date Filter
@@ -690,6 +710,7 @@
 
     function clearFilters() {
         document.getElementById("filterStatus").value = "All";
+        document.getElementById("filterPhase").value = "All";
         const ownerEl = document.getElementById("filterOwner");
         if (ownerEl) ownerEl.value = "All";
         document.getElementById("filterDateFrom").value = "";
@@ -719,6 +740,7 @@
 
         const name = document.getElementById("pName").value.trim();
         const pType = document.getElementById("pType").value;
+        const status = document.getElementById("pStatus").value;
         const phase = document.getElementById("pPhase").value;
         const pStart = document.getElementById("pStart").value;
         const deadline = document.getElementById("pDeadline").value;
@@ -730,6 +752,10 @@
         }
         if (!pType) {
             showAlert("Project type is required", "danger");
+            return;
+        }
+        if (!status) {
+            showAlert("Project status is required", "danger");
             return;
         }
         if (!phase) {
@@ -763,7 +789,7 @@
                 btn.disabled = false;
                 btn.innerHTML = "Create Project";
             })
-            .createProject(name, pStart, deadline, phase, pType, outcomes, risks);
+            .createProject(name, pStart, deadline, status, phase, pType, outcomes, risks);
     }
 
     function handleActionSubmit(e) {
@@ -879,6 +905,7 @@
         document.getElementById("editProjectId").value = projectId;
         document.getElementById("editProjectName").value = escapeHtml(project.name);
         document.getElementById("editProjectStatus").value = project.status;
+        document.getElementById("editProjectPhase").value = project.phase || "";
         document.getElementById("editProjectPercentage").value = project.percentageCompleted || 0;
         document.getElementById("editProjectNote").value = "";
         // populate optional dates
@@ -906,10 +933,25 @@
 
         const projectId = document.getElementById("editProjectId").value;
         const status = document.getElementById("editProjectStatus").value;
+        const phase = document.getElementById("editProjectPhase").value;
         const percentage = parseInt(document.getElementById("editProjectPercentage").value) || 0;
         const startDate = document.getElementById("editProjectStart").value || null;
         const deadline = document.getElementById("editProjectDeadline").value || null;
         const note = document.getElementById("editProjectNote").value.trim();
+
+        // validation
+        if (!status) {
+            showAlert("Status is required", "danger");
+            btn.disabled = false;
+            btn.innerHTML = "Save Changes";
+            return;
+        }
+        if (!phase) {
+            showAlert("Phase is required", "danger");
+            btn.disabled = false;
+            btn.innerHTML = "Save Changes";
+            return;
+        }
 
         google.script.run
             .withSuccessHandler(res => {
@@ -925,7 +967,7 @@
                 btn.disabled = false;
                 btn.innerHTML = "Save Changes";
             })
-            .updateProject(projectId, status, percentage, note, startDate, deadline);
+            .updateProject(projectId, status, phase, percentage, note, startDate, deadline);
     }
 
     function handleProjectCommentSubmit(e) {
