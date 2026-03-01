@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <base target="_top">
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet"
+    integrity="sha384-9ndCyUaIbzAi2FUVXJi0CjmCapSmO7SnpJef0486qhLnuZ2cdeRhO02iuK6FUUVM" crossorigin="anonymous">
+  <!-- Custom CSS -->
+  <?!= include('styles'); ?>
+</head>
+
+<body class="bg-light">
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow">
+    <div class="container-fluid">
+      <a class="navbar-brand fw-bold" href="#">🚀 Project Hub</a>
+      <div class="d-flex align-items-center">
+        <button id="btnAdminPanel" class="btn btn-sm btn-outline-light me-3 d-none" onclick="toggleAdminPanel()">Admin
+          Panel</button>
+        <span class="text-white" id="userInfo">
+          <span class="spinner-border spinner-border-sm me-1" role="status"></span> Loading...
+        </span>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content -->
+  <div class="container mt-4">
+
+    <!-- Error/Success Toasts -->
+    <div id="alertContainer" class="mb-3"></div>
+
+    <!-- Header Actions -->
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+      <h2 id="mainHeading">Dashboard</h2>
+      <div id="mainActions" class="d-flex gap-2 flex-wrap">
+
+        <button id="btnNewProject" class="btn btn-success me-2 d-none" data-bs-toggle="modal"
+          data-bs-target="#projectModal">+ New Project</button>
+        <button id="btnNewAction" class="btn btn-info text-white d-none" data-bs-toggle="modal"
+          data-bs-target="#actionModal">+ Assign Action</button>
+      </div>
+    </div>
+
+    <!-- Manager Roll-Up Metrics -->
+    <div class="mb-3 d-flex justify-content-between align-items-center">
+      <h5 class="mb-0 fw-bold">📊 Dashboard Metrics</h5>
+      <button class="btn btn-sm btn-outline-secondary" id="metricsToggleBtn" onclick="toggleMetrics()">
+        <span id="metricsToggleIcon">▼</span> Collapse
+      </button>
+    </div>
+    <div class="row mb-4" id="rollupMetrics">
+      <!-- Row 1: Key Metrics -->
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-primary text-white shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">Active Projects</h6>
+              <h2 class="mb-0 fw-bold" id="metricActive">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">📊</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-success text-white shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">Avg Completion</h6>
+              <h2 class="mb-0 fw-bold"><span id="metricAvg">-</span>%</h2>
+            </div>
+            <div class="fs-1 opacity-50">✅</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-danger text-white shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">Blocked Actions</h6>
+              <h2 class="mb-0 fw-bold" id="metricBlocked">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">⚠️</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-warning text-dark shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-black-50 small">Total Projects</h6>
+              <h2 class="mb-0 fw-bold" id="metricTotal">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">📁</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-dark text-white shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">Completion Rate</h6>
+              <h2 class="mb-0 fw-bold"><span id="metricCompletionRate">-</span>%</h2>
+            </div>
+            <div class="fs-1 opacity-50">🎯</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-secondary text-white shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">Completed</h6>
+              <h2 class="mb-0 fw-bold" id="metricCompleted">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">✓</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 2: Action Metrics -->
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-info text-dark shadow-sm h-100">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-black-50 small">Total Actions</h6>
+              <h2 class="mb-0 fw-bold" id="metricActions">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">✎</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-teal text-white shadow-sm h-100" style="background: linear-gradient(135deg, #20c997 0%, #1aa179 100%) !important;">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">Actions Done</h6>
+              <h2 class="mb-0 fw-bold" id="metricCompletedActions">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">⚡</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-purple text-white shadow-sm h-100" style="background: linear-gradient(135deg, #6f42c1 0%, #5a32a3 100%) !important;">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">On-Time Tasks</h6>
+              <h2 class="mb-0 fw-bold" id="metricOnTime">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">⏰</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
+        <div class="card bg-orange text-white shadow-sm h-100" style="background: linear-gradient(135deg, #fd7e14 0%, #dd5f0d 100%) !important;">
+          <div class="card-body py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 class="mb-0 text-white-50 small">High Priority</h6>
+              <h2 class="mb-0 fw-bold" id="metricHighPriority">-</h2>
+            </div>
+            <div class="fs-1 opacity-50">🔥</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 3: Breakdown Sections -->
+      <div class="col-lg-4 col-md-6 col-sm-12 mb-3">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-light border-0 py-3">
+            <h6 class="mb-0 fw-bold text-primary">📊 Status Distribution</h6>
+          </div>
+          <div class="card-body py-2">
+            <div id="metricStatuses" class="small lh-sm">
+              Loading...
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4 col-md-6 col-sm-12 mb-3">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-light border-0 py-3">
+            <h6 class="mb-0 fw-bold text-success">📈 Phase Completion</h6>
+          </div>
+          <div class="card-body py-2">
+            <div id="metricPhaseBreakdown" class="small lh-sm">
+              Loading...
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4 col-md-6 col-sm-12 mb-3">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-light border-0 py-3">
+            <h6 class="mb-0 fw-bold text-info">💡 Quick Stats</h6>
+          </div>
+          <div class="card-body py-2">
+            <small class="d-block mb-2"><span class="text-muted">Completion Goal:</span> <span class="fw-bold">85%</span></small>
+            <small class="d-block mb-2"><span class="text-muted">On-Track Projects:</span> <span class="fw-bold text-success" id="onTrackProjects">-</span></small>
+            <small class="d-block mb-2"><span class="text-muted">At-Risk Projects:</span> <span class="fw-bold text-danger" id="atRiskProjects">-</span></small>
+            <div class="mt-3">
+              <small class="text-muted d-block mb-1">Health Score</small>
+              <div class="progress" style="height: 8px;">
+                <div class="progress-bar" id="healthScore" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard Filters -->
+    <div class="card mb-4 shadow-sm">
+      <div class="card-body">
+        <div class="row align-items-end g-3">
+          <div class="col-md-4">
+            <label class="form-label fw-bold">Filter Status</label>
+            <select class="form-select" id="filterStatus" onchange="applyFilters()">
+              <option value="All">All Statuses</option>
+              <option value="Pending">Pending</option>
+              <option value="In Progress">In Progress</option>
+              <option value="Completed">Completed</option>
+              <option value="Blocked">Blocked</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-bold">Updated From</label>
+            <input type="date" class="form-control" id="filterDateFrom" onchange="applyFilters()">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-bold">Updated To</label>
+            <input type="date" class="form-control" id="filterDateTo" onchange="applyFilters()">
+          </div>
+          <div class="col-md-2 d-flex justify-content-end">
+            <button class="btn btn-outline-secondary w-100" onclick="clearFilters()">Clear Filters</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dashboard Content: Projects Grid -->
+    <div class="card shadow-sm mb-4">
+      <div class="card-body">
+        <div class="row" id="projectsGrid">
+          <div class="col-12 text-center text-muted py-5">
+            <div class="spinner-border text-primary" role="status"></div>
+            <div class="mt-2">Loading projects...</div>
+          </div>
+          <!-- Project Cards Render Injected Here -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin Panel (Phase 3) -->
+    <div id="adminPanel" class="d-none">
+      <ul class="nav nav-tabs mb-4" role="tablist">
+        <li class="nav-item">
+          <button class="nav-link active fw-bold" data-bs-toggle="tab" data-bs-target="#admin-users" type="button">User
+            Management</button>
+        </li>
+        <li class="nav-item">
+          <button class="nav-link fw-bold" data-bs-toggle="tab" data-bs-target="#admin-settings" type="button">Global
+            Settings</button>
+        </li>
+      </ul>
+
+      <div class="tab-content">
+        <!-- Users Admin Tab -->
+        <div class="tab-pane fade show active" id="admin-users" tabindex="0">
+          <div class="card shadow-sm mb-3">
+            <div class="card-body">
+              <h5 class="fw-bold">Users List</h5>
+              <table class="table table-sm mt-3">
+                <thead class="table-light">
+                  <tr>
+                    <th>Email</th>
+                    <th>Name</th>
+                    <th>Role</th>
+                    <th>Manager Email</th>
+                    <th>Email Alerts</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersTableBody">
+                  <tr>
+                    <td colspan="6">Loading Users...</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <form id="addUserForm"
+                class="row g-2 align-items-end mt-2 bg-light p-3 rounded border border-light-subtle">
+                <div class="col-md-3">
+                  <label class="small fw-bold">Email</label>
+                  <input type="email" id="auEmail" class="form-control form-control-sm" required>
+                </div>
+                <div class="col-md-3">
+                  <label class="small fw-bold">Name</label>
+                  <input type="text" id="auName" class="form-control form-control-sm" required>
+                </div>
+                <div class="col-md-2">
+                  <label class="small fw-bold">Role</label>
+                  <select id="auRole" class="form-select form-select-sm">
+                    <option>User</option>
+                    <option>Manager</option>
+                    <option>Admin</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <label class="small fw-bold">Manager</label>
+                  <input type="email" id="auManager" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-1 d-flex align-items-center mb-1">
+                  <div class="form-check form-switch w-100 d-flex justify-content-center">
+                    <input class="form-check-input" type="checkbox" id="auEmailEnabled" checked
+                      title="Receive Daily Summary Emails?">
+                  </div>
+                </div>
+                <div class="col-md-1">
+                  <button type="submit" class="btn btn-sm btn-primary w-100" id="btnSaveUser">Save</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings Admin Tab -->
+        <div class="tab-pane fade" id="admin-settings" tabindex="0">
+          <div class="card shadow-sm">
+            <div class="card-body">
+              <h5 class="fw-bold">Expandable Dropdowns</h5>
+              <p class="text-muted small">Add or remove system-wide dropdown variables. Careful when removing settings
+                currently in use!</p>
+
+              <div class="row" id="adminSettingsGrid">
+                <!-- JS will inject tables here for ProjectType, Phase, Status -->
+              </div>
+
+              <hr class="my-4">
+              <h6 class="fw-bold">Add New Setting</h6>
+              <form id="addSettingForm" class="row g-2 align-items-center">
+                <div class="col-auto">
+                  <select id="asKey" class="form-select form-select-sm">
+                    <option value="ProjectType">Project Type</option>
+                    <option value="Phase">Project Phase</option>
+                    <option value="Status">Action/Project Status</option>
+                  </select>
+                </div>
+                <div class="col-auto">
+                  <input type="text" id="asVal" class="form-control form-control-sm" placeholder="New Value..."
+                    required>
+                </div>
+                <div class="col-auto">
+                  <button type="submit" class="btn btn-sm btn-primary" id="btnSaveSetting">Add Setting</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div> <!-- /adminPanel -->
+
+  </div> <!-- /container -->
+
+  <!-- ============================================== -->
+  <!-- MODALS -->
+  <!-- ============================================== -->
+
+  <!-- New Project Modal -->
+  <div class="modal fade" id="projectModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form id="projectForm">
+          <div class="modal-header">
+            <h5 class="modal-title">Create New Project</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="row">
+              <div class="col-md-8 mb-3">
+                <label class="form-label fw-bold">Project Name</label>
+                <input type="text" class="form-control" id="pName" required>
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label fw-bold">Project Type</label>
+                <select class="form-select" id="pType"></select>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-4 mb-3">
+                <label class="form-label fw-bold">Phase</label>
+                <select class="form-select" id="pPhase"></select>
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label fw-bold">Start Date</label>
+                <input type="date" class="form-control" id="pStart">
+              </div>
+              <div class="col-md-4 mb-3">
+                <label class="form-label fw-bold">Deadline</label>
+                <input type="date" class="form-control" id="pDeadline">
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label fw-bold">Business Outcomes (ROI / Goal)</label>
+              <textarea class="form-control" id="pOutcomes" rows="2"></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Key Risks & Blockers</label>
+              <textarea class="form-control" id="pRisks" rows="2"></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="btnSaveProject">Create Project</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Project Modal -->
+  <div class="modal fade" id="editProjectModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form id="editProjectForm">
+          <input type="hidden" id="editProjectId">
+          <div class="modal-header bg-light">
+            <h5 class="modal-title">Edit Project</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label fw-bold">Project Name</label>
+              <input type="text" class="form-control" id="editProjectName" disabled>
+              <small class="text-muted">(Read-only)</small>
+            </div>
+            
+            <div class="row">
+              <div class="col-md-6 mb-3">
+                <label class="form-label fw-bold">Status</label>
+                <select class="form-select" id="editProjectStatus" required>
+                  <option value="">Select Status...</option>
+                  <option value="Pending">Pending</option>
+                  <option value="In Progress">In Progress</option>
+                  <option value="On Hold">On Hold</option>
+                  <option value="Completed">Completed</option>
+                  <option value="Closure">Closure</option>
+                </select>
+              </div>
+              <div class="col-md-6 mb-3">
+                <label class="form-label fw-bold">Completion %</label>
+                <input type="number" class="form-control" id="editProjectPercentage" min="0" max="100" required>
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label fw-bold">Update Note</label>
+              <textarea class="form-control" id="editProjectNote" rows="3" placeholder="What changed? (optional)"></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-warning" id="btnSaveProjectEdit">Save Changes</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Action Modal -->
+  <div class="modal fade" id="actionModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form id="actionForm">
+          <div class="modal-header">
+            <h5 class="modal-title">Assign New Action</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label fw-bold">Associated Project</label>
+              <select class="form-select" id="aProjectSelect" required>
+                <option value="">Select Project...</option>
+                <!-- Populated via JS -->
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Description</label>
+              <textarea class="form-control" id="aDesc" rows="2" required></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Assignee Email</label>
+              <div class="input-group">
+                <input type="text" class="form-control" id="aAssigneeSearch" placeholder="Search assignee..." autocomplete="off">
+                <button class="btn btn-outline-secondary" type="button" id="aAssigneeDropdown">▼</button>
+              </div>
+              <input type="hidden" id="aAssignee" required>
+              <div id="aAssigneeDropdownList" class="dropdown-menu w-100" style="position: absolute; z-index: 1000; max-height: 200px; overflow-y: auto; display: none;">
+                <!-- Populated via JS -->
+              </div>
+              <small class="text-muted d-block mt-1">Selected: <span id="aAssigneeSelected">None</span></small>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Priority</label>
+              <select class="form-select" id="aPriority" required>
+                <option value="Low">Low</option>
+                <option value="Medium" selected>Medium</option>
+                <option value="High">High</option>
+                <option value="Critical">Critical</option>
+              </select>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-info text-white" id="btnSaveAction">Assign Action</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Update Status Modal (For Action Owners) -->
+  <div class="modal fade" id="updateActionModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form id="updateActionForm">
+          <input type="hidden" id="uActionId">
+          <div class="modal-header">
+            <h5 class="modal-title">Update Action <span id="uActionTitle" class="text-primary"></span></h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label fw-bold">Status</label>
+              <select class="form-select" id="uStatus" required>
+                <option value="Pending">Pending</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Blocked">Blocked</option>
+                <option value="Completed">Completed</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Update Note</label>
+              <textarea class="form-control" id="uNote" rows="3" placeholder="What progress was made?"></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">% Complete</label>
+              <input type="number" class="form-control" id="uPct" min="0" max="100" value="0" required>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="btnSaveUpdate">Save Update</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Project Comment Modal -->
+  <div class="modal fade" id="projectCommentModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <form id="projectCommentForm">
+          <input type="hidden" id="cProjectId">
+          <div class="modal-header">
+            <h5 class="modal-title">Add Comment to Project</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label fw-bold">Comment / Note</label>
+              <textarea class="form-control" id="cText" rows="3" required></textarea>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button type="submit" class="btn btn-primary" id="btnSaveComment">Add Comment</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- History View Modal -->
+  <div class="modal fade" id="historyModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Log History</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="timeline" id="historyTimeline">
+            <!-- JS Injected History Details -->
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS Bundle -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-geWF76RCwLtnZ8qwWowPQNguL3RmwHVBC9FhGdlKrxdiJJigb/j/68SIy3Te4Bkz"
+    crossorigin="anonymous"></script>
+
+  <!-- Custom Scripts -->
+  <?!= include('scripts'); ?>
+</body>
+
+</html>

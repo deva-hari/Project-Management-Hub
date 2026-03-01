@@ -1,0 +1,1093 @@
+<script>
+    // FIXED: Add escapeHtml function to prevent XSS
+    function escapeHtml(text) {
+        if (!text) return "";
+        const div = document.createElement('div');
+        div.textContent = String(text);
+        return div.innerHTML;
+    }
+
+    // State
+    let appState = {
+        email: "",
+        role: "",
+        projects: [],
+        actions: [],
+        currentProjectId: null  // Track which project is being viewed in detail modal
+    };
+
+    // Initialization
+    document.addEventListener("DOMContentLoaded", () => {
+        loadDashboard();
+
+        // Form Listeners
+        document.getElementById("projectForm").addEventListener("submit", handleProjectSubmit);
+        document.getElementById("actionForm").addEventListener("submit", handleActionSubmit);
+        document.getElementById("updateActionForm").addEventListener("submit", handleUpdateSubmit);
+        document.getElementById("projectCommentForm").addEventListener("submit", handleProjectCommentSubmit);
+        
+        // Add edit project form listener
+        const editForm = document.getElementById("editProjectForm");
+        if (editForm) {
+            editForm.addEventListener("submit", handleEditProjectSubmit);
+        }
+
+        // Admin Form Listeners
+        document.getElementById("addUserForm").addEventListener("submit", handleSaveUser);
+        document.getElementById("addSettingForm").addEventListener("submit", handleSaveSetting);
+    });
+
+    // --- API Calls ---
+    function loadDashboard() {
+        console.log("1. Starting loadDashboard()...");
+        google.script.run
+            .withSuccessHandler(data => {
+                console.log("2. SuccessHandler: Data received! Size:", data ? Object.keys(data).length : 0);
+                
+                if (!data) {
+                    showAlert("No data returned from server", "danger");
+                    return;
+                }
+                
+                appState = {
+                    email: data.email || "",
+                    role: data.role || "",
+                    projects: data.projects || [],
+                    actions: data.actions || [],
+                    settings: data.settings || { projectTypes: [], phases: [], statuses: [] },
+                    metrics: data.metrics || {}
+                };
+
+                // Store users globally for assignee dropdown
+                window.allUsers = data.users || [];
+
+                console.log("3. Populating Dropdowns...");
+                populateDropdowns();
+
+                console.log("4. Rendering Header...");
+                renderHeader();
+
+                console.log("5. Rendering Projects...");
+                renderProjects();
+
+                console.log("6. Applying RBAC...");
+                applyRBAC();
+
+                console.log("7. Dashboard load successfully finished.");
+            })
+            .withFailureHandler(err => {
+                console.error("Dashboard load failed:", err);
+                document.getElementById("projectsGrid").innerHTML = `<div class='col-12 text-center text-danger py-5'>Failed to load data. Please refresh.</div>`;
+                showAlert("Error loading dashboard: " + err.message, "danger");
+            })
+            .getDashboardData();
+    }
+
+    // --- Renderers ---
+    function renderHeader() {
+        document.getElementById("userInfo").innerHTML = `
+      <i class="me-2">👤 ${escapeHtml(appState.email || "")}</i> 
+      <span class="badge bg-secondary">${escapeHtml(appState.role || "")}</span>
+    `;
+
+        // Enhanced Metrics
+        if (appState && appState.metrics) {
+            // Core metrics
+            document.getElementById("metricActive").textContent = appState.metrics.totalActive || 0;
+            document.getElementById("metricAvg").textContent = appState.metrics.averageCompletion || 0;
+            document.getElementById("metricBlocked").textContent = appState.metrics.blockedActions || 0;
+
+            // Calculate additional metrics
+            const totalProjects = appState.projects.length || 0;
+            const completedProjects = appState.projects.filter(p => p.status === "Completed" || p.status === "Closure").length || 0;
+            const completionRate = totalProjects > 0 ? Math.round((completedProjects / totalProjects) * 100) : 0;
+            
+            const totalActions = appState.actions.length || 0;
+            const completedActions = appState.actions.filter(a => a.status === "Completed").length || 0;
+            const onTimeActions = appState.actions.filter(a => {
+                if (a.dueDate) {
+                    const dueDate = new Date(a.dueDate);
+                    return dueDate >= new Date();
+                }
+                return true;
+            }).length || 0;
+            
+            const highPriorityActions = appState.actions.filter(a => a.priority === "High" || a.priority === "Critical").length || 0;
+            const avgCompletionByPhase = calculatePhaseCompletion();
+            
+            // Update extended metrics
+            document.getElementById("metricTotal").textContent = totalProjects;
+            document.getElementById("metricCompleted").textContent = completedProjects;
+            document.getElementById("metricCompletionRate").textContent = completionRate;
+            document.getElementById("metricActions").textContent = totalActions;
+            document.getElementById("metricCompletedActions").textContent = completedActions;
+            document.getElementById("metricOnTime").textContent = onTimeActions;
+            document.getElementById("metricHighPriority").textContent = highPriorityActions;
+
+            // Status breakdown
+            let statusHtml = "";
+            for (const [status, count] of Object.entries(appState.metrics.statusCounts || {})) {
+                statusHtml += `<div class="d-flex justify-content-between mb-1"><span class="text-muted">${escapeHtml(status)}</span><span class="fw-bold">${count}</span></div>`;
+            }
+            document.getElementById("metricStatuses").innerHTML = statusHtml || "No projects.";
+            
+            // Calculate phase completion and health metrics
+            calculatePhaseCompletion();
+        }
+    }
+
+    function calculatePhaseCompletion() {
+        const phases = {};
+        appState.projects.forEach(p => {
+            if (!phases[p.phase]) {
+                phases[p.phase] = { total: 0, sum: 0 };
+            }
+            phases[p.phase].total++;
+            phases[p.phase].sum += (p.percentageCompleted || 0);
+        });
+        
+        let html = "";
+        for (const [phase, data] of Object.entries(phases)) {
+            const avg = Math.round(data.sum / data.total);
+            html += `<small class="d-block mb-1"><span class="text-muted">${phase}:</span> <strong>${avg}%</strong></small>`;
+        }
+        if (document.getElementById("metricPhaseBreakdown")) {
+            document.getElementById("metricPhaseBreakdown").innerHTML = html || "No phases.";
+        }
+        
+        // Calculate health score and risk metrics
+        const totalProjects = appState.projects.length || 1;
+        const onTrackCount = appState.projects.filter(p => (p.percentageCompleted || 0) >= 50).length;
+        const atRiskCount = appState.projects.filter(p => (p.percentageCompleted || 0) < 30 && p.status !== "Completed").length;
+        const healthScore = Math.round((appState.metrics?.averageCompletion || 0) + (onTrackCount / totalProjects * 20));
+        
+        document.getElementById("onTrackProjects").textContent = onTrackCount;
+        document.getElementById("atRiskProjects").textContent = atRiskCount;
+        document.getElementById("healthScore").style.width = Math.min(100, healthScore) + "%";
+        
+        return html;
+    }
+
+    function applyRBAC() {
+        // Everyone can create items (backend guards it further if needed)
+        document.getElementById("btnNewProject").classList.remove("d-none");
+        document.getElementById("btnNewAction").classList.remove("d-none");
+
+        // Show Admin Panel Button
+        if (appState.role === "Admin") {
+            document.getElementById("btnAdminPanel").classList.remove("d-none");
+        }
+    }
+
+    function populateDropdowns() {
+        if (!appState || !appState.settings) {
+            console.warn("appState or settings not available yet");
+            return;
+        }
+
+        const fill = (id, arr) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const currentVal = el.value;
+            el.innerHTML = arr.map(v => `<option value="${v}">${v}</option>`).join("");
+            if (currentVal && arr.includes(currentVal)) el.value = currentVal;
+        };
+
+        fill('pType', appState.settings.projectTypes || []);
+        fill('pPhase', appState.settings.phases || []);
+        fill('filterStatus', ["All", ...(appState.settings.statuses || [])]);
+        fill('uStatus', appState.settings.statuses || []);
+        
+        // Populate assignee dropdown
+        populateAssigneeDropdown();
+    }
+
+    function populateAssigneeDropdown() {
+        // Get all users from appState
+        let users = [];
+        
+        // Extract users from metrics or load from backend
+        // For now, we'll use a data structure built during dashboard load
+        if (window.allUsers && window.allUsers.length > 0) {
+            users = window.allUsers;
+        }
+
+        const dropdownList = document.getElementById("aAssigneeDropdownList");
+        if (!dropdownList) return;
+
+        dropdownList.innerHTML = users.map(user => `
+            <a class="dropdown-item" href="#" onclick="selectAssignee('${escapeHtml(user.email)}', '${escapeHtml(user.name || user.email)}')">
+                <strong>${escapeHtml(user.name || user.email)}</strong>
+                <br><small class="text-muted">${escapeHtml(user.email)}</small>
+            </a>
+        `).join("");
+
+        // Setup search and toggle
+        const searchInput = document.getElementById("aAssigneeSearch");
+        if (searchInput) {
+            searchInput.addEventListener("input", filterAssignees);
+        }
+
+        const toggleBtn = document.getElementById("aAssigneeDropdown");
+        if (toggleBtn) {
+            toggleBtn.addEventListener("click", () => {
+                const list = document.getElementById("aAssigneeDropdownList");
+                list.style.display = list.style.display === "none" ? "block" : "none";
+            });
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener("click", (e) => {
+            const list = document.getElementById("aAssigneeDropdownList");
+            const search = document.getElementById("aAssigneeSearch");
+            const toggle = document.getElementById("aAssigneeDropdown");
+            if (list && search && toggle && !search.contains(e.target) && !toggle.contains(e.target)) {
+                list.style.display = "none";
+            }
+        });
+    }
+
+    function filterAssignees() {
+        const searchTerm = document.getElementById("aAssigneeSearch").value.toLowerCase();
+        const items = document.getElementById("aAssigneeDropdownList").querySelectorAll(".dropdown-item");
+        
+        items.forEach(item => {
+            const text = item.textContent.toLowerCase();
+            item.style.display = text.includes(searchTerm) ? "block" : "none";
+        });
+    }
+
+    function selectAssignee(email, name) {
+        document.getElementById("aAssignee").value = email;
+        document.getElementById("aAssigneeSearch").value = name;
+        document.getElementById("aAssigneeSelected").textContent = name;
+        document.getElementById("aAssigneeDropdownList").style.display = "none";
+    }
+
+    function renderProjects() {
+        console.log(" -> renderProjects: Initialization.");
+        const grid = document.getElementById("projectsGrid");
+        const select = document.getElementById("aProjectSelect");
+
+        grid.innerHTML = "";
+        select.innerHTML = '<option value="">Select Project...</option>';
+
+        console.log(" -> renderProjects: Filtering appState projects.");
+        const filteredProjects = appState.projects.filter(passesFilters);
+        console.log(" -> renderProjects: " + filteredProjects.length + " projects passed the filter.");
+
+        if (filteredProjects.length === 0) {
+            grid.innerHTML = "<div class='col-12 text-center text-muted py-5'>No matching projects.</div>";
+            return;
+        }
+
+        // Populate dropdown
+        filteredProjects.forEach(p => {
+            select.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`;
+        });
+
+        // Always render grouped list view
+        renderProjectsList(filteredProjects, grid);
+    }
+
+    function renderProjectsList(projects, grid) {
+        // Group by status
+        const groups = {};
+        projects.forEach(p => {
+            if (!groups[p.status]) groups[p.status] = [];
+            groups[p.status].push(p);
+        });
+
+        let html = "";
+        const statusOrder = ["Not started", "Pending", "In Progress", "On Hold", "Completed", "Closure"];
+        let groupCounter = 0;
+        
+        statusOrder.forEach(status => {
+            if (!groups[status]) return;
+            
+            const statusColor = getStatusColor(status);
+            const groupId = `group-${groupCounter++}`;
+            
+            html += `
+                <div class="col-12 mb-3">
+                    <div class="card border-${statusColor} border-start border-5 shadow-sm">
+                        <div class="card-header bg-light border-0 p-3" role="button" data-bs-toggle="collapse" data-bs-target="#${groupId}" style="cursor: pointer;">
+                            <h6 class="mb-0 fw-bold text-${statusColor}">
+                                <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status}
+                            </h6>
+                        </div>
+                        <div class="collapse show" id="${groupId}">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 30%;">Project</th>
+                                            <th style="width: 15%;">Phase</th>
+                                            <th style="width: 15%;">Progress</th>
+                                            <th style="width: 20%;">Owner</th>
+                                            <th style="width: 20%;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+            `;
+
+            groups[status].forEach(p => {
+                const progressWidth = Math.min(100, p.percentageCompleted || 0);
+                html += `
+                    <tr class="align-middle">
+                        <td>
+                            <div class="fw-bold">${escapeHtml(p.name)}</div>
+                            <small class="text-muted">${escapeHtml(p.id)}</small>
+                        </td>
+                        <td><small>${p.phase}</small></td>
+                        <td>
+                            <div class="progress" style="height: 18px;">
+                                <div class="progress-bar" style="width: ${progressWidth}%">${p.percentageCompleted || 0}%</div>
+                            </div>
+                        </td>
+                        <td><small>${escapeHtml(p.owner.substring(0, 25))}</small></td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')" title="View Details">View</button>
+                            <button class="btn btn-sm btn-outline-warning" onclick="openEditProjectModal('${escapeHtml(p.id)}')" title="Edit Project">Edit</button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        grid.innerHTML = html;
+    }
+
+    function renderProjectsGrouped(projects, grid) {
+        // Group by status
+        const groups = {};
+        projects.forEach(p => {
+            if (!groups[p.status]) groups[p.status] = [];
+            groups[p.status].push(p);
+        });
+
+        let html = "";
+        const statusOrder = ["Not started", "Pending", "In Progress", "On Hold", "Completed", "Closure"];
+        
+        statusOrder.forEach(status => {
+            if (!groups[status]) return;
+            
+            const statusColor = getStatusColor(status);
+            html += `
+                <div class="col-12 mb-4">
+                    <div class="card border-${statusColor} border-start border-5 shadow-sm">
+                        <div class="card-header bg-light border-0">
+                            <h6 class="mb-0 fw-bold text-${statusColor}">
+                                <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status}
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+            `;
+
+            groups[status].forEach(p => {
+                const progressWidth = Math.min(100, p.percentageCompleted || 0);
+                html += `
+                    <div class="col-md-6 col-lg-4 mb-3">
+                        <div class="card h-100 project-card border-0 shadow-sm">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-start mb-2">
+                                    <h6 class="card-title fw-bold flex-grow-1">${escapeHtml(p.name)}</h6>
+                                    <span class="badge bg-${statusColor} text-white">${p.percentageCompleted || 0}%</span>
+                                </div>
+                                <small class="text-muted d-block mb-2">${escapeHtml(p.id)} • ${p.projectType}</small>
+                                
+                                <div class="progress mb-3" style="height: 6px;">
+                                    <div class="progress-bar" style="width: ${progressWidth}%"></div>
+                                </div>
+
+                                <div class="row small mb-3 gx-1">
+                                    <div class="col-6"><span class="text-muted">Phase:</span><br><strong>${p.phase}</strong></div>
+                                    <div class="col-6"><span class="text-muted">Owner:</span><br><strong>${escapeHtml(p.owner).substring(0, 20)}</strong></div>
+                                </div>
+
+                                <small class="text-muted d-block mb-2">Due: ${p.deadline || "N/A"}</small>
+
+                                <div class="btn-group d-grid gap-1 d-flex" role="group">
+                                    <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')">Details</button>
+                                    <button class="btn btn-sm btn-outline-warning" onclick="openEditProjectModal('${escapeHtml(p.id)}')">Edit</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            html += `
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        grid.innerHTML = html;
+    }
+
+    function expandProjectDetail(projectId) {
+        appState.currentProjectId = projectId;  // Track current project
+        const project = appState.projects.find(p => p.id === projectId);
+        if (!project) return;
+
+        const modal = new bootstrap.Modal(document.getElementById("projectDetailModal") || createProjectDetailModal());
+        document.getElementById("projectDetailTitle").textContent = escapeHtml(project.name);
+        
+        const detailBody = document.getElementById("projectDetailBody");
+        const progressWidth = Math.min(100, project.percentageCompleted || 0);
+        
+        detailBody.innerHTML = `
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <h6 class="text-muted">Status</h6>
+                    <p class="fw-bold"><span class="badge bg-${getStatusColor(project.status)}">${project.status}</span></p>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="text-muted">Progress</h6>
+                    <div class="progress" style="height: 25px;">
+                        <div class="progress-bar bg-success" style="width: ${progressWidth}%">${project.percentageCompleted || 0}%</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <h6 class="text-muted">Phase</h6>
+                    <p class="fw-bold">${project.phase}</p>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="text-muted">Timeline</h6>
+                    <p class="fw-bold">${project.startDate} to ${project.deadline}</p>
+                </div>
+            </div>
+
+            <hr>
+
+            <div class="mb-3">
+                <h6 class="text-muted">Latest Update</h6>
+                <p class="small mb-1"><span class="text-muted">${escapeHtml(project.lastUpdatedDate)}</span></p>
+                <div class="alert alert-light border mb-0"><small>${escapeHtml(project.lastUpdatedText || "No updates yet.")}</small></div>
+            </div>
+
+            <hr>
+
+            <div class="mb-3">
+                <h6 class="text-muted">Business Outcomes</h6>
+                <p class="small">${escapeHtml(project.outcomes || "N/A")}</p>
+            </div>
+
+            <div class="mb-3">
+                <h6 class="text-muted">Key Risks</h6>
+                <p class="small">${escapeHtml(project.risks || "N/A")}</p>
+            </div>
+
+            <hr>
+
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <h6 class="text-muted">Project Owner</h6>
+                    <p class="small fw-bold">${escapeHtml(project.owner)}</p>
+                </div>
+                <div class="col-md-6">
+                    <h6 class="text-muted">Project Manager</h6>
+                    <p class="small fw-bold">${escapeHtml(project.manager || "N/A")}</p>
+                </div>
+            </div>
+
+            <hr>
+
+            <h6 class="text-muted mb-2">Linked Actions</h6>
+            ${renderProjectActions(projectId)}
+        `;
+
+        modal.show();
+    }
+
+
+
+    function createProjectDetailModal() {
+        const modal = document.createElement("div");
+        modal.id = "projectDetailModal";
+        modal.className = "modal fade";
+        modal.innerHTML = `
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header bg-light">
+                        <h5 class="modal-title" id="projectDetailTitle">Project Details</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body" id="projectDetailBody">
+                        Loading...
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-sm btn-info text-white" id="btnAddNote" onclick="openAddNoteModal()">📝 Add Note</button>
+                        <button type="button" class="btn btn-sm btn-warning text-dark" id="btnViewHistory" onclick="openProjectHistoryModal()">📋 History</button>
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        return modal;
+    }
+
+    function renderProjectActions(projectId) {
+        const projActions = appState.actions.filter(a => a.projectId === projectId);
+        if (projActions.length === 0) return "<small class='text-muted'>No actions assigned yet.</small>";
+
+        let html = "<ul class='list-group list-group-flush small'>";
+        projActions.forEach(a => {
+            const badgeStyle = getStatusBadge(a.status);
+            html += `
+          <li class="list-group-item px-0 py-2 d-flex justify-content-between align-items-center">
+             <div>
+                <b>${escapeHtml(a.desc)}</b> <span class="${badgeStyle} ms-1">${a.status}</span> <br>
+                <span class="text-muted">Owner: ${escapeHtml(a.owner)} • ${a.percentageCompleted}% Complete</span>
+             </div>
+             <div>
+                <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})">Update</button>
+                <button class="btn btn-sm btn-light border" onclick='openHistoryModal(${JSON.stringify(a.updates)})'>Logs</button>
+             </div>
+          </li>
+        `;
+        });
+        html += "</ul>";
+        return html;
+    }
+
+    // --- Filter Handlers ---
+    function passesFilters(item) {
+        const statusFilter = document.getElementById("filterStatus").value;
+        const dateFrom = document.getElementById("filterDateFrom").value;
+        const dateTo = document.getElementById("filterDateTo").value;
+
+        // 1. Status Filter
+        if (statusFilter !== "All" && item.status !== statusFilter) return false;
+
+        // 2. Date Filter
+        if (dateFrom || dateTo) {
+            const itemDate = new Date(item.lastUpdatedDate).getTime();
+            if (dateFrom && itemDate < new Date(dateFrom).setHours(0, 0, 0, 0)) return false;
+            if (dateTo && itemDate > new Date(dateTo).setHours(23, 59, 59, 999)) return false;
+        }
+
+        return true;
+    }
+
+    function applyFilters() {
+        populateDropdowns();
+        renderProjects();
+    }
+
+    function clearFilters() {
+        document.getElementById("filterStatus").value = "All";
+        document.getElementById("filterDateFrom").value = "";
+        document.getElementById("filterDateTo").value = "";
+        applyFilters();
+    }
+
+    // --- Utils ---
+    function getStatusColor(status) {
+        if (status === "Completed") return "success";
+        if (status === "Blocked") return "danger";
+        if (status === "In Progress") return "info";
+        return "warning"; // Pending/Not Started
+    }
+
+    function getStatusBadge(status) {
+        if (status === "Completed") return "badge bg-success";
+        if (status === "Blocked") return "badge bg-danger";
+        if (status === "In Progress") return "badge bg-info text-dark";
+        return "badge bg-warning text-dark";
+    }
+
+    // --- Interactions ---
+    function handleProjectSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveProject");
+
+        const name = document.getElementById("pName").value.trim();
+        const pType = document.getElementById("pType").value;
+        const phase = document.getElementById("pPhase").value;
+        const pStart = document.getElementById("pStart").value;
+        const deadline = document.getElementById("pDeadline").value;
+
+        // FIXED: Add input validation
+        if (!name) {
+            showAlert("Project name is required", "danger");
+            return;
+        }
+        if (!pType) {
+            showAlert("Project type is required", "danger");
+            return;
+        }
+        if (!phase) {
+            showAlert("Project phase is required", "danger");
+            return;
+        }
+        if (pStart && deadline && new Date(pStart) > new Date(deadline)) {
+            showAlert("Start date cannot be after deadline", "danger");
+            return;
+        }
+
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+
+        const outcomes = document.getElementById("pOutcomes").value;
+        const risks = document.getElementById("pRisks").value;
+
+        google.script.run
+            .withSuccessHandler(res => {
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('projectModal')).hide();
+                document.getElementById("projectForm").reset();
+                btn.disabled = false;
+                btn.innerHTML = "Create Project";
+
+                // Soft data refresh to prevent iFrame cycle bug
+                showAlert("Project Created Successfully!", "success");
+                loadDashboard();
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                btn.disabled = false;
+                btn.innerHTML = "Create Project";
+            })
+            .createProject(name, pStart, deadline, phase, pType, outcomes, risks);
+    }
+
+    function handleActionSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveAction");
+
+        const projId = document.getElementById("aProjectSelect").value;
+        const desc = document.getElementById("aDesc").value.trim();
+        const assignee = document.getElementById("aAssignee").value.trim();
+
+        // FIXED: Add input validation
+        if (!projId) {
+            showAlert("Please select a project", "danger");
+            return;
+        }
+        if (!desc) {
+            showAlert("Task description is required", "danger");
+            return;
+        }
+        if (!assignee || !assignee.includes("@")) {
+            showAlert("Valid assignee email is required", "danger");
+            return;
+        }
+
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Assigning...`;
+
+        const priority = document.getElementById("aPriority").value;
+
+        google.script.run
+            .withSuccessHandler(res => {
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('actionModal')).hide();
+                document.getElementById("actionForm").reset();
+                btn.disabled = false;
+                btn.innerHTML = "Assign Action";
+
+                showAlert("Assigning...", "success");
+                loadDashboard();
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                btn.disabled = false;
+                btn.innerHTML = "Assign Action";
+            })
+            .createAction(projId, desc, assignee, priority);
+    }
+
+    function openUpdateModal(actionId, currentStatus, currentPct) {
+        // FIXED: Validate that action exists
+        const action = appState.actions.find(a => a.id === actionId);
+        if (!action) {
+            showAlert("Action not found in your dataset", "danger");
+            return;
+        }
+
+        document.getElementById("uActionId").value = actionId;
+        document.getElementById("uActionTitle").textContent = actionId;
+        document.getElementById("uStatus").value = currentStatus;
+        document.getElementById("uNote").value = "";
+        document.getElementById("uPct").value = currentPct || 0;
+
+        const myModal = new bootstrap.Modal(document.getElementById('updateActionModal'));
+        myModal.show();
+    }
+
+    function handleUpdateSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveUpdate");
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+
+        const actionId = document.getElementById("uActionId").value;
+        const newStatus = document.getElementById("uStatus").value;
+        const pct = document.getElementById("uPct").value;
+        const note = document.getElementById("uNote").value;
+
+        google.script.run
+            .withSuccessHandler(res => {
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('updateActionModal')).hide();
+                btn.disabled = false;
+                btn.innerHTML = "Save Update";
+
+                showAlert("Action saved!", "success");
+                loadDashboard();
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                btn.disabled = false;
+                btn.innerHTML = "Save Update";
+            })
+            .updateActionStatus(actionId, newStatus, pct, note);
+    }
+
+    // --- Modal Handlers --- 
+    function openCommentModal(projectId) {
+        document.getElementById("cProjectId").value = projectId;
+        document.getElementById("cText").value = "";
+        new bootstrap.Modal(document.getElementById('projectCommentModal')).show();
+    }
+
+    function openEditProjectModal(projectId) {
+        const project = appState.projects.find(p => p.id === projectId);
+        if (!project) {
+            showAlert("Project not found", "danger");
+            return;
+        }
+
+        document.getElementById("editProjectId").value = projectId;
+        document.getElementById("editProjectName").value = escapeHtml(project.name);
+        document.getElementById("editProjectStatus").value = project.status;
+        document.getElementById("editProjectPercentage").value = project.percentageCompleted || 0;
+        document.getElementById("editProjectNote").value = "";
+
+        new bootstrap.Modal(document.getElementById('editProjectModal')).show();
+    }
+
+    function handleEditProjectSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveProjectEdit");
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+
+        const projectId = document.getElementById("editProjectId").value;
+        const status = document.getElementById("editProjectStatus").value;
+        const percentage = parseInt(document.getElementById("editProjectPercentage").value) || 0;
+        const note = document.getElementById("editProjectNote").value.trim();
+
+        google.script.run
+            .withSuccessHandler(res => {
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('editProjectModal')).hide();
+                btn.disabled = false;
+                btn.innerHTML = "Save Changes";
+
+                showAlert("Project updated successfully!", "success");
+                loadDashboard();
+            })
+            .withFailureHandler(err => {
+                showAlert("Error: " + err.message, "danger");
+                btn.disabled = false;
+                btn.innerHTML = "Save Changes";
+            })
+            .updateProject(projectId, status, percentage, note);
+    }
+
+    function handleProjectCommentSubmit(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveComment");
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+
+        const pId = document.getElementById("cProjectId").value;
+        const text = document.getElementById("cText").value;
+
+        google.script.run
+            .withSuccessHandler(res => {
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('projectCommentModal')).hide();
+                btn.disabled = false;
+                btn.innerHTML = "Add Comment";
+
+                showAlert("Comment added.", "success");
+                loadDashboard();
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                btn.disabled = false;
+                btn.innerHTML = "Add Comment";
+            })
+            .addProjectComment(pId, text);
+    }
+
+    function openHistoryModal(historyArray) {
+        const container = document.getElementById("historyTimeline");
+        container.innerHTML = "";
+
+        if (!historyArray || historyArray.length === 0) {
+            container.innerHTML = "<div class='text-muted text-center py-4'>No history available.</div>";
+        } else {
+            // Reverse to show newest at the top
+            [...historyArray].reverse().forEach(log => {
+                const date = new Date(log.timestamp).toLocaleString();
+                const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
+
+                container.innerHTML += `
+                  <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
+                    <div class="card-body py-2">
+                       <div class="d-flex justify-content-between align-items-center mb-1">
+                          <small class="fw-bold text-dark">${log.user}</small>
+                          <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                       </div>
+                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                    </div>
+                  </div>
+                `;
+            });
+        }
+
+        new bootstrap.Modal(document.getElementById('historyModal')).show();
+    }
+
+    function openAddNoteModal() {
+        if (!appState.currentProjectId) {
+            showAlert("No project selected", "warning");
+            return;
+        }
+        document.getElementById("cProjectId").value = appState.currentProjectId;
+        document.getElementById("cText").value = "";
+        new bootstrap.Modal(document.getElementById('projectCommentModal')).show();
+    }
+
+    function openProjectHistoryModal() {
+        if (!appState.currentProjectId) {
+            showAlert("No project selected", "warning");
+            return;
+        }
+        const project = appState.projects.find(p => p.id === appState.currentProjectId);
+        if (!project) {
+            showAlert("Project not found", "danger");
+            return;
+        }
+        // Use project updates as history
+        const historyArray = project.updates || [];
+        openHistoryModal(historyArray);
+    }
+
+    function toggleMetrics() {
+        const metricsDiv = document.getElementById("rollupMetrics");
+        const btn = document.getElementById("metricsToggleBtn");
+        const icon = document.getElementById("metricsToggleIcon");
+        
+        if (metricsDiv.classList.contains("collapsed")) {
+            metricsDiv.classList.remove("collapsed");
+            btn.textContent = "▼ Collapse";
+            btn.insertBefore(icon, btn.firstChild);
+        } else {
+            metricsDiv.classList.add("collapsed");
+            btn.textContent = "▶ Expand";
+            btn.insertBefore(icon, btn.firstChild);
+        }
+    }
+
+    function showAlert(message, type) {
+        const container = document.getElementById("alertContainer");
+        container.innerHTML = `
+      <div class="alert alert-${type} alert-dismissible fade show shadow-sm" role="alert">
+        ${message}
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    `;
+        setTimeout(() => { container.innerHTML = ""; }, 5000);
+    }
+
+    // ==============================================
+    // ADMIN PANEL LOGIC (PHASE 3)
+    // ==============================================
+
+    function toggleAdminPanel() {
+        const isHidden = document.getElementById("adminPanel").classList.contains("d-none");
+        const dashGrid = document.querySelector("#projectsGrid").closest(".card"); // get the project grid container card
+
+        if (isHidden) {
+            document.getElementById("adminPanel").classList.remove("d-none");
+            dashGrid.classList.add("d-none");
+            document.getElementById("mainActions").classList.add("d-none");
+            document.getElementById("mainHeading").innerText = "Admin Console";
+            document.getElementById("btnAdminPanel").innerText = "Exit Admin";
+            document.getElementById("btnAdminPanel").classList.replace("btn-outline-light", "btn-warning");
+            loadAdminData();
+        } else {
+            document.getElementById("adminPanel").classList.add("d-none");
+            dashGrid.classList.remove("d-none");
+            document.getElementById("mainActions").classList.remove("d-none");
+            document.getElementById("mainHeading").innerText = "Dashboard";
+            document.getElementById("btnAdminPanel").innerText = "Admin Panel";
+            document.getElementById("btnAdminPanel").classList.replace("btn-warning", "btn-outline-light");
+            loadDashboard(); // Refresh state from any settings changes
+        }
+    }
+
+    function loadAdminData() {
+        document.getElementById("adminUsersTableBody").innerHTML = "<tr><td colspan='5' class='text-center'>Loading...</td></tr>";
+        google.script.run
+            .withSuccessHandler(renderAdminData)
+            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .getAdminData();
+    }
+
+    function renderAdminData(data) {
+        // Render Users
+        const uBody = document.getElementById("adminUsersTableBody");
+        uBody.innerHTML = "";
+        data.users.forEach(u => {
+            uBody.innerHTML += `
+               <tr>
+                 <td>${escapeHtml(u.email)}</td>
+                 <td>${escapeHtml(u.name)}</td>
+                 <td><span class="badge bg-secondary">${escapeHtml(u.role)}</span></td>
+                 <td>${escapeHtml(u.manager || "-")}</td>
+                 <td>${u.emailEnabled ? '<span class="text-success fw-bold">✓ Yes</span>' : '<span class="text-muted">✗ No</span>'}</td>
+                 <td><button class="btn btn-sm btn-outline-danger py-0 btn-delete-user" data-email="${escapeHtml(u.email)}">Drop</button></td>
+               </tr>
+            `;
+        });
+
+        // Render Settings Grouped
+        const sGrid = document.getElementById("adminSettingsGrid");
+        sGrid.innerHTML = "";
+
+        const groupedSettings = data.settingsList.reduce((acc, curr) => {
+            if (!acc[curr.key]) acc[curr.key] = [];
+            acc[curr.key].push(curr.value);
+            return acc;
+        }, {});
+
+        for (const [key, values] of Object.entries(groupedSettings)) {
+            let rowHtml = "";
+            values.forEach(v => {
+                // FIXED: Use data attributes instead of onclick to prevent XSS
+                rowHtml += `
+                 <li class="list-group-item d-flex justify-content-between align-items-center py-1">
+                   <small>${escapeHtml(v)}</small>
+                   <button class="btn btn-sm btn-link text-danger p-0 btn-delete-setting" data-key="${escapeHtml(key)}" data-value="${escapeHtml(v)}">&times;</button>
+                 </li>
+                `;
+            });
+
+            sGrid.innerHTML += `
+              <div class="col-md-4 mb-3">
+                 <div class="card h-100">
+                    <div class="card-header fw-bold bg-light py-2">${escapeHtml(key)}</div>
+                    <ul class="list-group list-group-flush">${rowHtml}</ul>
+                 </div>
+              </div>
+            `;
+        }
+
+        // FIXED: Add event listeners instead of onclick handlers
+        document.querySelectorAll('.btn-delete-setting').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const key = this.getAttribute('data-key');
+                const val = this.getAttribute('data-value');
+                if (!confirm(`Remove '${val}' from ${key}?`)) return;
+                google.script.run
+                    .withSuccessHandler(res => { showAlert(res, "success"); loadAdminData(); })
+                    .withFailureHandler(err => showAlert(err.message, "danger"))
+                    .deleteSetting(key, val);
+            });
+        });
+
+        document.querySelectorAll('.btn-delete-user').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const email = this.getAttribute('data-email');
+                if (!confirm(`Are you sure you want to remove ${email}?`)) return;
+                google.script.run
+                    .withSuccessHandler(res => { showAlert(res, "success"); loadAdminData(); })
+                    .withFailureHandler(err => showAlert(err.message, "danger"))
+                    .deleteUser(email);
+            });
+        });
+    }
+
+    // --- Admin Mutations ---
+
+    function handleSaveUser(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveUser");
+        btn.disabled = true;
+
+        const email = document.getElementById("auEmail").value;
+        const name = document.getElementById("auName").value;
+        const role = document.getElementById("auRole").value;
+        const manager = document.getElementById("auManager").value;
+        const emailEnabled = document.getElementById("auEmailEnabled").checked;
+
+        google.script.run
+            .withSuccessHandler(res => {
+                showAlert(res, "success");
+                document.getElementById("addUserForm").reset();
+                loadAdminData();
+                btn.disabled = false;
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                btn.disabled = false;
+            })
+            .saveUser(email, name, role, manager, emailEnabled);
+    }
+
+    function deleteUser(email) {
+        if (!confirm(`Are you sure you want to remove ${email}?`)) return;
+        google.script.run
+            .withSuccessHandler(res => { showAlert(res, "success"); loadAdminData(); })
+            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .deleteUser(email);
+    }
+
+    function handleSaveSetting(e) {
+        e.preventDefault();
+        const btn = document.getElementById("btnSaveSetting");
+        btn.disabled = true;
+
+        const key = document.getElementById("asKey").value;
+        const val = document.getElementById("asVal").value;
+
+        google.script.run
+            .withSuccessHandler(res => {
+                showAlert(res, "success");
+                document.getElementById("asVal").value = "";
+                loadAdminData();
+                btn.disabled = false;
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                btn.disabled = false;
+            })
+            .saveSetting(key, val);
+    }
+
+    function deleteSetting(key, val) {
+        if (!confirm(`Remove '${val}' from ${key}?`)) return;
+        google.script.run
+            .withSuccessHandler(res => { showAlert(res, "success"); loadAdminData(); })
+            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .deleteSetting(key, val);
+    }
+</script>
