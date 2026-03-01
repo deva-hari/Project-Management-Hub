@@ -527,7 +527,7 @@
         
         const detailBody = document.getElementById("projectDetailBody");
         const progressWidth = Math.min(100, project.percentageCompleted || 0);
-        
+
         detailBody.innerHTML = `
             <div class="row mb-3">
                 <div class="col-md-6">
@@ -592,6 +592,16 @@
             ${renderProjectActions(projectId)}
         `;
 
+        // toggle delete button visibility based on role
+        const delBtn = document.getElementById("btnDeleteProject");
+        if (delBtn) {
+            if (appState.role === "Admin") {
+                delBtn.classList.remove("d-none");
+            } else {
+                delBtn.classList.add("d-none");
+            }
+        }
+
         modal.show();
     }
 
@@ -602,7 +612,7 @@
         modal.id = "projectDetailModal";
         modal.className = "modal fade";
         modal.innerHTML = `
-            <div class="modal-dialog modal-lg">
+            <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
                 <div class="modal-content">
                     <div class="modal-header bg-light">
                         <h5 class="modal-title" id="projectDetailTitle">Project Details</h5>
@@ -614,6 +624,7 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-sm btn-info text-white" id="btnAddNote" onclick="openAddNoteModal()">📝 Add Note</button>
                         <button type="button" class="btn btn-sm btn-warning text-dark" id="btnViewHistory" onclick="openProjectHistoryModal()">📋 History</button>
+                        <button type="button" class="btn btn-sm btn-danger d-none" id="btnDeleteProject" onclick="confirmDeleteProject()">🗑️ Delete</button>
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                     </div>
                 </div>
@@ -639,6 +650,7 @@
              <div>
                 <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})">Update</button>
                 <button class="btn btn-sm btn-light border" onclick='openHistoryModal(${JSON.stringify(a.updates)})'>Logs</button>
+                ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteAction('${escapeHtml(a.id)}')">Delete</button>` : ''}
              </div>
           </li>
         `;
@@ -873,6 +885,16 @@
         document.getElementById("editProjectStart").value = localDateToInput(project.startDate);
         document.getElementById("editProjectDeadline").value = localDateToInput(project.deadline);
 
+        // toggle delete button visibility in edit modal
+        const delEditBtn = document.getElementById("btnDeleteProjectEdit");
+        if (delEditBtn) {
+            if (appState.role === "Admin") {
+                delEditBtn.classList.remove("d-none");
+            } else {
+                delEditBtn.classList.add("d-none");
+            }
+        }
+
         new bootstrap.Modal(document.getElementById('editProjectModal')).show();
     }
 
@@ -932,7 +954,7 @@
             .addProjectComment(pId, text);
     }
 
-    function openHistoryModal(historyArray) {
+    function openHistoryModal(historyArray, projectId) {
         const container = document.getElementById("historyTimeline");
         container.innerHTML = "";
 
@@ -950,6 +972,7 @@
                        <div class="d-flex justify-content-between align-items-center mb-1">
                           <small class="fw-bold text-dark">${log.user}</small>
                           <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                          ${projectId && appState.role === 'Admin' ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')" title="Delete note">&times;</button>` : ''}
                        </div>
                        <p class="mb-0 small">${log.text} ${statusBadge}</p>
                     </div>
@@ -983,7 +1006,7 @@
         }
         // Use project updates as history
         const historyArray = project.updates || [];
-        openHistoryModal(historyArray);
+        openHistoryModal(historyArray, appState.currentProjectId);
     }
 
     function openProjectNotesModal(projectId) {
@@ -1011,6 +1034,7 @@
                        <div class="d-flex justify-content-between align-items-center mb-1">
                           <small class="fw-bold text-dark">${log.user}</small>
                           <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                          ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
                        </div>
                        <p class="mb-0 small">${log.text} ${statusBadge}</p>
                     </div>
@@ -1050,6 +1074,42 @@
             return latest.text || project.lastUpdatedText || "No updates yet.";
         }
         return project.lastUpdatedText || "No updates yet.";
+    }
+
+    // ---------- Admin deletion helpers ----------
+    function confirmDeleteProject() {
+        if (!confirm("Are you sure you want to permanently delete this project and all its actions?")) return;
+        const pid = appState.currentProjectId;
+        google.script.run
+            .withSuccessHandler(res => {
+                showAlert(res, "success");
+                loadDashboard();
+                // close any open project modals
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('projectDetailModal')).hide();
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('editProjectModal')).hide();
+            })
+            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .deleteProject(pid);
+    }
+
+    function confirmDeleteAction(actionId) {
+        if (!confirm("Delete this action? It cannot be recovered.")) return;
+        google.script.run
+            .withSuccessHandler(res => { 
+                showAlert(res, "success"); 
+                loadDashboard(); 
+                bootstrap.Modal.getOrCreateInstance(document.getElementById('projectDetailModal')).hide();
+            })
+            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .deleteAction(actionId);
+    }
+
+    function confirmDeleteNote(projectId, timestamp) {
+        if (!confirm("Remove this note from the project history?")) return;
+        google.script.run
+            .withSuccessHandler(res => { showAlert(res, "success"); loadDashboard(); openProjectNotesModal(projectId); })
+            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .deleteProjectComment(projectId, timestamp);
     }
 
     function showAlert(message, type) {

@@ -670,27 +670,34 @@ function sendTaskAssignmentEmail(action) {
     You have been assigned a new task.
     Task ID: ${action.id}
     Description: ${action.desc}
-    
+
     Please log in to the Project Management Hub to view and update this task.
   `;
 
+    // make sure we have a valid recipient
+    if (!action || !action.owner) {
+        Logger.log('sendTaskAssignmentEmail called without a valid owner: %s', JSON.stringify(action));
+        return;
+    }
+
     try {
-        //MailApp.sendEmail(action.owner, subject, body);
         MailApp.sendEmail({
-                to: action.owner,
-                name: 'Project Management System',     // this is the “from” name
-                replyTo: 'no-reply@example.com',   // replies will go here
-                subject: subject,
-                body: body
-            });
+            to: action.owner,
+            subject: subject,
+            body: body,
+            // use the display name and a no‑reply address so the mailbox is readable
+            name: 'Project Management Hub',
+            replyTo: 'no-reply@example.com'
+            // if you need a specific from-address that is an alias, add: from: 'alias@yourdomain.com'
+        });
     } catch (e) {
         // Log full error and rethrow so caller / execution logs show the failure
         Logger.log('sendTaskAssignmentEmail: attempting to send to: %s', action.owner);
         Logger.log('sendTaskAssignmentEmail: error: %s', e && e.toString ? e.toString() : JSON.stringify(e));
-        // Surface the error so google.script.run.withFailureHandler() can receive it
         throw new Error('Failed to send assignment email to ' + action.owner + ': ' + (e && e.message ? e.message : JSON.stringify(e)));
     }
 }
+
 
 // Automatically triggers (e.g., Daily at 5 PM)
 function sendDailySummaryEmails() {
@@ -789,10 +796,11 @@ function sendDailySummaryEmails() {
         try {
             MailApp.sendEmail({
                 to: userEmail,
-                name:     'Project Management System',     // this is the “from” name
-                replyTo:  'no-reply@example.com',   // replies will go here
                 subject: "Project Hub: Daily Wrap-Up",
-                htmlBody: emailHtml
+                htmlBody: emailHtml,
+                name: 'Project Management Hub',     // sender display name
+                replyTo: 'no-reply@example.com'
+                // use `from` here if you have a verified alias: from: 'alias@yourdomain.com'
             });
         } catch (e) {
             console.error(`Failed to send digest to ${userEmail}: ` + e.message);
@@ -885,3 +893,92 @@ function updateProject(projectId, newStatus, newPercentage, updateNote, newStart
     
     return "Project updated successfully";
 }
+
+// ------------------------------------------------------------------
+// ADMIN HELPERS - DELETE OPERATIONS
+// ------------------------------------------------------------------
+
+/**
+ * Deletes a project row along with any linked actions. Admin only.
+ */
+function deleteProject(projectId) {
+    const email = Session.getActiveUser().getEmail();
+    if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const pSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const pData = pSheet.getDataRange().getValues();
+    let found = false;
+
+    for (let i = 1; i < pData.length; i++) {
+        if (pData[i][0] === projectId) {
+            pSheet.deleteRow(i + 1);
+            found = true;
+            break;
+        }
+    }
+    if (!found) throw new Error("Project not found: " + projectId);
+
+    // remove any actions tied to the deleted project
+    const aSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    const aData = aSheet.getDataRange().getValues();
+    // iterate backwards when deleting rows
+    for (let j = aData.length - 1; j > 0; j--) {
+        if (aData[j][1] === projectId) {
+            aSheet.deleteRow(j + 1);
+        }
+    }
+
+    return "Project and associated actions removed";
+}
+
+/**
+ * Deletes a single action (admin only).
+ */
+function deleteAction(actionId) {
+    const email = Session.getActiveUser().getEmail();
+    if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const aSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    const aData = aSheet.getDataRange().getValues();
+
+    for (let i = 1; i < aData.length; i++) {
+        if (aData[i][0] === actionId) {
+            aSheet.deleteRow(i + 1);
+            return "Action deleted";
+        }
+    }
+    throw new Error("Action not found: " + actionId);
+}
+
+/**
+ * Remove an individual comment/note from a project. Admin only.
+ * timestamp should match the note object that was stored.
+ */
+function deleteProjectComment(projectId, timestamp) {
+    const email = Session.getActiveUser().getEmail();
+    if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const pSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const pData = pSheet.getDataRange().getValues();
+
+    for (let i = 1; i < pData.length; i++) {
+        if (pData[i][0] === projectId) {
+            let comments = [];
+            try {
+                comments = JSON.parse(pData[i][14] || "[]");
+            } catch (e) {
+                comments = [];
+            }
+
+            const filtered = comments.filter(c => c.timestamp !== timestamp);
+            pSheet.getRange(i + 1, 15).setValue(JSON.stringify(filtered));
+
+            return "Comment removed";
+        }
+    }
+    throw new Error("Project not found: " + projectId);
+}
+

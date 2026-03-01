@@ -159,9 +159,12 @@
         z-index: 1065 !important;
     }
 
-    /* All modals must be clickable */
+    /* All modals must be clickable and centered vertically */
     .modal-dialog {
         pointer-events: auto !important;
+        display: flex;
+        align-items: center;
+        min-height: calc(100% - 1rem); /* give a little breathing room top/bottom */
     }
 
     .modal-content {
@@ -169,6 +172,9 @@
         border: none;
         border-radius: 16px;
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        /* ensure content never exceeds viewport height and is scrollable */
+        max-height: 90vh;
+        overflow-y: auto;
     }
 
     .modal-header, .modal-body, .modal-footer {

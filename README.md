@@ -10,6 +10,7 @@ A lightweight, secure, and dynamic Project Management tool built entirely on Goo
 - **Role-Based Access Control (RBAC)**:
   - **Admins**: Full control over all system modules.
   - **Project Owners**: Full CRUD (Create, Read, Update, Delete) capabilities for the projects they own and ability to assign actions.
+  - **Administrators**: Can now permanently remove projects (along with their linked actions) and delete individual actions or project notes directly from the UI. Deletion buttons are only visible to admin users.
   - **Managers**: Read-only oversight access to all projects and actions within their designated department.
   - **Action Owners**: Task-level access. Can view their assigned tasks, update statuses, and log progress notes.
 
@@ -40,24 +41,52 @@ The GAS environment acts as the server.
 - Clean, responsive HTML/JS interface.
 - Built utilizing templated HTML (`index.html`, `css.html`, `js.html`) to keep code modular within the GAS environment.
 
+### Developer Notes 🔧
+
+A quick reference to some of the key server‑side routines you’ll find in `Code.gs`:
+
+- `initializeDatabase()` – one‑time utility that creates/clears the four sheets (`Projects`, `Actions`, `Users`, `Settings`), sets header formatting, seeds default dropdown values (project types, statuses, phases), and writes the current session user as an Admin in `Users`.
+- `getDashboardData()` – the main read endpoint used by the frontend. It applies role‑based filters, builds downstream employee chains, parses JSON logs, and returns projects, actions, metrics, and settings to render the UI.
+- CRUD operations:
+  - `createProject(...)`, `updateProject(...)` – handle project creation and status/percentage/date updates with authorization checks.
+  - `createAction(...)`, `updateActionStatus(...)` – actions are always assigned to the owning project’s owner; update routines append JSON logs and send assignment emails.
+  - Admin-only deletion helpers: `deleteProject(...)`, `deleteAction(...)`, `deleteProjectComment(...)`.
+- Notification helpers:
+  - `sendTaskAssignmentEmail(...)` – standardizes the assignment message, replies go to a no‑reply address.
+  - `sendDailySummaryEmails()` – time‑driven trigger to email opted‑in users a digest of their active projects/actions.
+- Utility functions:
+  - `getUserRole()` / `getDownstreamEmployees()` – used for access control and manager roll‑ups.
+  - `generateId(prefix)` – simple random identifier generator for projects/actions.
+
+Understanding these functions will help you customize the behavior, add new endpoints, or troubleshoot permission issues.
+
 ### Database (Google Sheets)
 
-Acts as a relational database. It is structured into three primary tables:
+Acts as a relational database. Sheets are created and formatted by the `initializeDatabase()` helper function (see **Step 1.3** below). The script also adds a `Settings` sheet for dropdown options and seeds some sensible defaults, and inserts the executing user as an **Admin**.
+
+It is composed of four tables:
 
 #### 1. `Projects`
 
 Tracks high-level project information and ownership.
-*Columns*: `ProjectID` | `Name` | `OwnerEmail` | `ManagerEmail` | `Status` | `Deadline` | `CreatedAt`
+*Columns* (in order):
+`ProjectID` | `Name` | `OwnerEmail` | `ManagerEmail` | `Status` | `Phase` | `PercentageCompleted` | `StartDate` | `Deadline` | `BusinessOutcomes` | `KeyRisks` | `LastUpdatedText` | `CreatedAt` | `LastUpdated` | `Comments` | `ProjectType`
 
 #### 2. `Actions`
 
 Tracks granular tasks associated with specific projects.
-*Columns*: `ActionID` | `ProjectID` | `Description` | `ActionOwnerEmail` | `Status` | `Priority` | `UpdateLog`
+*Columns*:
+`ActionID` | `ProjectID` | `Description` | `ActionOwnerEmail` | `Status` | `PercentageCompleted` | `Priority` | `LastUpdated` | `Updates`
 
 #### 3. `Users`
 
 Central directory mapping emails to permissions.
-*Columns*: `Email` | `Name` | `Role` | `Department`
+*Columns*:
+`Email` | `Name` | `Role` | `ManagerEmail` | `EmailNotifications`
+
+#### 4. `Settings`
+
+Holds key/value pairs used to populate dropdowns for project types, statuses, and phases. The initialization routine populates this sheet with a standard set of values but administrators can add/remove as needed.
 
 ---
 
@@ -78,31 +107,45 @@ Central directory mapping emails to permissions.
    - Click `+ Create` → `Google Sheets` → `Blank spreadsheet`
    - Name it: **"Project Management Hub Database"**
 
-2. **Set up the three required sheets**:
+2. **Set up the required sheets manually** (optional):
    - Delete the default "Sheet1" tab
-   - Create three new tabs by right-clicking the sheet tab area and selecting "Insert Sheet"
-   - Name them exactly:
-     - `Projects`
-     - `Actions`
-     - `Users`
+   - Add new tabs named exactly `Projects`, `Actions`, `Users`, and `Settings`.
 
-3. **Configure the Projects sheet**:
+3. **Run the initializer (optional but recommended)**:
+   - Open the Apps Script editor after you've copied `Code.gs` (see Step 2 below).
+   - Choose the `initializeDatabase` function from the dropdown at the top and click the ▶️ run button.
+   - Approve any authorization requests that appear. The script will create/clear all four sheets, set bold headers, add a row of default settings values, and insert your email as an Admin user.
+
+> **Tip:** if you run this function you can skip steps **3–6** below since the required columns are already populated.
+
+> **Tip:** the repo contains a handy Apps Script helper called `initializeDatabase()` that will create and format all four sheets for you with the correct column headers, seed default dropdown entries, and add the current user as an Admin.
+### Recent Updates
+
+* Modal dialogs are now vertically centered, capped at 90% of the viewport height, and the body becomes scrollable on smaller screens.
+* Email notifications use a consistent display name and reply‑to address so replies are routed correctly.  Name/`from` fields are fixed for both task assignment and daily summary messages.
+* Admin users can remove projects, actions and notes (see above).
+
+3. **(Manual alternative) Configure the Projects sheet**:
    - Click the `Projects` tab
-   - In row 1, add these column headers (A to I):
-     - `ProjectID`, `Name`, `OwnerEmail`, `ManagerEmail`, `Status`, `Phase`, `StartDate`, `Deadline`, `PercentageCompleted`, `LastUpdatedDate`, `LastUpdatedText`, `BusinessOutcomes`, `KeyRisks`, `Updates`
+   - In row 1, add these column headers (A to P):
+     - `ProjectID`, `Name`, `OwnerEmail`, `ManagerEmail`, `Status`, `Phase`, `PercentageCompleted`, `StartDate`, `Deadline`, `BusinessOutcomes`, `KeyRisks`, `LastUpdatedText`, `CreatedAt`, `LastUpdated`, `Comments`, `ProjectType`
 
-4. **Configure the Actions sheet**:
+4. **(Manual alternative) Configure the Actions sheet**:
    - Click the `Actions` tab
-   - In row 1, add these column headers (A to J):
-     - `ActionID`, `ProjectID`, `Description`, `ActionOwnerEmail`, `Status`, `Priority`, `PercentageCompleted`, `Deadline`, `Updates`
+   - In row 1, add these column headers (A to I):
+     - `ActionID`, `ProjectID`, `Description`, `ActionOwnerEmail`, `Status`, `PercentageCompleted`, `Priority`, `LastUpdated`, `Updates`
 
-5. **Configure the Users sheet**:
+5. **(Manual alternative) Configure the Users sheet**:
    - Click the `Users` tab
-   - In row 1, add these column headers (A to D):
-     - `Email`, `Name`, `Role`, `Department`
+   - In row 1, add these column headers (A to E):
+     - `Email`, `Name`, `Role`, `ManagerEmail`, `EmailNotifications`
    - Add at least one user (your email):
      - Example: `your.email@company.com` | `Your Name` | `Admin` | `IT`
      - Roles can be: `Admin`, `ProjectOwner`, `Manager`, or `ActionOwner`
+
+6. **(Manual alternative) Configure the Settings sheet**:
+   - Click the `Settings` tab
+   - In row 1, add headers `SettingKey` and `SettingValue`. This sheet is used by the app to produce dropdown lists for statuses, phases and project types. The initializer function will populate a useful starter set of values.
 
 ---
 
