@@ -47,6 +47,14 @@
         if (actionModalEl) {
             actionModalEl.addEventListener('show.bs.modal', () => updateAssignedTo());
         }
+        // reset the new project form whenever the modal opens so stale values are cleared
+        const projectModalEl = document.getElementById('projectModal');
+        if (projectModalEl) {
+            projectModalEl.addEventListener('show.bs.modal', () => {
+                const form = document.getElementById('projectForm');
+                if (form) form.reset();
+            });
+        }
     });
 
     // --- API Calls ---
@@ -221,6 +229,7 @@
         fill('filterStatus', ["All", ...(appState.settings.statuses || [])]);
         fill('filterPhase', ["All", ...(appState.settings.phases || [])]);
         fill('uStatus', appState.settings.statuses || []);
+        fill('editProjectType', appState.settings.projectTypes || []);
         fill('editProjectStatus', appState.settings.statuses || []);
         fill('editProjectPhase', appState.settings.phases || []);
         
@@ -915,6 +924,7 @@
 
         document.getElementById("editProjectId").value = projectId;
         document.getElementById("editProjectName").value = escapeHtml(project.name);
+        document.getElementById("editProjectType").value = project.projectType || "";
         document.getElementById("editProjectStatus").value = project.status;
         document.getElementById("editProjectPhase").value = project.phase || "";
         document.getElementById("editProjectPercentage").value = project.percentageCompleted || 0;
@@ -943,6 +953,12 @@
         btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
 
         const projectId = document.getElementById("editProjectId").value;
+        let type = null;
+        const typeEl = document.getElementById("editProjectType");
+        if (typeEl) {
+            type = typeEl.value;
+            if (type === "") type = null;
+        }
         const status = document.getElementById("editProjectStatus").value;
         const phase = document.getElementById("editProjectPhase").value;
         const percentage = parseInt(document.getElementById("editProjectPercentage").value) || 0;
@@ -978,7 +994,7 @@
                 btn.disabled = false;
                 btn.innerHTML = "Save Changes";
             })
-            .updateProject(projectId, status, phase, percentage, note, startDate, deadline);
+            .updateProject(projectId, status, phase, percentage, note, startDate, deadline, type);
     }
 
     function handleProjectCommentSubmit(e) {

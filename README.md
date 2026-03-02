@@ -177,19 +177,12 @@ Holds key/value pairs used to populate dropdowns for project types, statuses, an
    - Copy contents from the repository's `appsscript.json`
    - Save all files (Ctrl+S)
 
-3. **Update the Sheet ID in Code.gs**:
-   - In your Google Sheet, look at the URL: `https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit`
-   - Copy the `{SHEET_ID}` part
-   - In the Apps Script editor, find the line that looks like:
-
-     ```javascript
-     const SHEET_ID = "your-sheet-id-here";
-     ```
-
-   - Replace `"your-sheet-id-here"` with your actual Sheet ID (keep the quotes)
-   - Save
+3. **No manual sheet ID required (container‑bound script)**:
+   - This project is designed to be copied directly into the Apps Script editor opened from the spreadsheet itself. The backend uses `SpreadsheetApp.getActiveSpreadsheet()` so you don't need to hard‑code a sheet ID. Just make sure you open the script by navigating to `Extensions → Apps Script` from the sheet you created.
 
 ---
+
+**Note:** When you open the web app the first time after deployment, you'll be able to create new projects using the modal. The form now includes a **Project Name** field and a **Project Type** dropdown (driven by the Settings sheet). Likewise, the **Edit Project** dialog exposes the project type so it can be adjusted later. If you run `initializeDatabase()` this form will be pre‑populated with default project types, statuses and phases.
 
 ### Step 3: Deploy as a Web App
 

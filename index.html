@@ -388,27 +388,36 @@
             <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
           <div class="modal-body">
+            <!-- project name and type are required inputs -->
+            <div class="mb-3">
+              <label class="form-label fw-bold">Project Name</label>
+              <input type="text" class="form-control" id="pName" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Project Type</label>
+              <select class="form-select" id="pType" required>
+                <option value="">Select type...</option>
+                <!-- options injected by JS -->
+              </select>
+            </div>
+
             <div class="row">
-              <div class="col-md-6 mb-3">
-                 <input type="hidden" id="uStatus">
-                 <div class="form-control-plaintext" id="uPhase">-</div>
-              </div>
               <div class="col-md-3 mb-3">
                 <label class="form-label fw-bold">Status</label>
-                <select class="form-select" id="pStatus"></select>
+                <select class="form-select" id="pStatus" required></select>
+              </div>
+              <div class="col-md-3 mb-3">
+                <label class="form-label fw-bold">Phase</label>
+                <select class="form-select" id="pPhase" required></select>
               </div>
             </div>
 
             <div class="row">
-              <div class="col-md-4 mb-3">
-                <label class="form-label fw-bold">Phase</label>
-                <select class="form-select" id="pPhase"></select>
-              </div>
-              <div class="col-md-4 mb-3">
+              <div class="col-md-6 mb-3">
                 <label class="form-label fw-bold">Start Date</label>
                 <input type="date" class="form-control" id="pStart">
               </div>
-              <div class="col-md-4 mb-3">
+              <div class="col-md-6 mb-3">
                 <label class="form-label fw-bold">Deadline</label>
                 <input type="date" class="form-control" id="pDeadline">
               </div>
@@ -447,6 +456,12 @@
               <label class="form-label fw-bold">Project Name</label>
               <input type="text" class="form-control" id="editProjectName" disabled>
               <small class="text-muted">(Read-only)</small>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-bold">Project Type</label>
+              <select class="form-select" id="editProjectType">
+                <!-- options filled by JS -->
+              </select>
             </div>
             
             <div class="row">

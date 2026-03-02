@@ -69,6 +69,7 @@ function initializeDatabase() {
 
     // Seed Default Settings
     const defaultSettings = [
+        ["ProjectType", "Other"],
         ["ProjectType", "Infrastructure"],
         ["ProjectType", "Software Development"],
         ["ProjectType", "Cloud Migration"],
@@ -503,6 +504,7 @@ function createProject(name, startDate, deadline, status, phase, projType, outco
     // fall back to defaults if caller didn't provide
     status = status || "Not Started";
     phase = phase || "Open";
+    projType = projType || "Other";
 
     // determine manager email by looking up user table
     const managerEmail = getManagerForUser(email);
@@ -850,7 +852,7 @@ function sendDailySummaryEmails() {
 }
 
 // --- UPDATE PROJECT ---
-function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote, newStart, newDeadline) {
+function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote, newStart, newDeadline, newType) {
     const email = Session.getActiveUser().getEmail();
     const role = getUserRole(email);
     
@@ -900,6 +902,11 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
         projectSheet.getRange(projectRowIndex + 1, 7).setValue(parseInt(newPercentage) || 0);
     }
     
+    // allow type change as well
+    if (newType !== undefined && newType !== null) {
+        projectSheet.getRange(projectRowIndex + 1, 16).setValue(newType);
+    }
+    
     // optional date updates
     if (newStart !== undefined && newStart !== null) {
         projectSheet.getRange(projectRowIndex + 1, 8).setValue(newStart);
@@ -934,7 +941,7 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
         projectSheet.getRange(projectRowIndex + 1, 15).setValue(JSON.stringify(currentComments));
     }
     
-    Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", Phase=" + newPhase + ", %=" + newPercentage + ", start=" + newStart + ", deadline=" + newDeadline);
+    Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", Phase=" + newPhase + ", %=" + newPercentage + ", start=" + newStart + ", deadline=" + newDeadline + ", type=" + newType);
     
     return "Project updated successfully";
 }
