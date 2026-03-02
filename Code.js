@@ -109,6 +109,23 @@ function getUserRole(email) {
     return "None";
 }
 
+/**
+ * Return the manager email for a given user email, or empty string if unknown.
+ */
+function getManagerForUser(email) {
+    if (!email) return "";
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const data = usersSheet.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+        if (data[i][0] === email) {
+            return data[i][3] || "";
+        }
+    }
+    return "";
+}
+
 // Recursively finds all emails that report up to the given managerEmail
 function getDownstreamEmployees(managerEmail, usersData) {
     let downstream = new Set();
@@ -199,8 +216,22 @@ function getDashboardData() {
             if (!row[0]) return; // Skip empty rows
             
             const projectOwner = row[2] || "";
-            const projectManager = row[3] || "";
-            
+            let projectManager = row[3] || "";
+
+            // if manager is blank, try to derive it from users sheet and persist
+            if (!projectManager && projectOwner) {
+                const derived = getManagerForUser(projectOwner);
+                if (derived) {
+                    projectManager = derived;
+                    // write back to sheet so future loads don't need to derive again
+                    try {
+                        projectsSheet.getRange(idx + 2, 4).setValue(derived); // idx+2 accounts for header row
+                    } catch (e) {
+                        Logger.log("Failed to persist derived manager for project " + row[0] + ": " + e.message);
+                    }
+                }
+            }
+
             // Admin, Project Owner, Direct Manager, or Manager anywhere up the chain
             let canSeeProject = false;
             
@@ -226,8 +257,8 @@ function getDashboardData() {
                 projects.push({
                     id: row[0],
                     name: row[1],
-                    owner: row[2],
-                    manager: row[3],
+                    owner: projectOwner,
+                    manager: projectManager,
                     status: row[4],
                     phase: row[5],
                     percentageCompleted: row[6],
@@ -473,11 +504,14 @@ function createProject(name, startDate, deadline, status, phase, projType, outco
     status = status || "Not Started";
     phase = phase || "Open";
 
+    // determine manager email by looking up user table
+    const managerEmail = getManagerForUser(email);
+
     sheet.appendRow([
         newId,
         name,
         email,
-        "", // Manager field - no longer used, role-based access from Users sheet
+        managerEmail, // populate manager if available
         status,
         phase,
         0, // percentage completed

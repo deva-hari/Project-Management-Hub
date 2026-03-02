@@ -382,7 +382,7 @@
                                             <th style="width: 30%;">Project</th>
                                             <th style="width: 15%;">Phase</th>
                                             <th style="width: 15%;">Progress</th>
-                                            <th style="width: 20%;">Owner</th>
+                                            <th style="width: 20%;">Owner / Manager</th>
                                             <th style="width: 20%;">Actions</th>
                                         </tr>
                                     </thead>
@@ -403,7 +403,7 @@
                                 <div class="progress-bar bg-${getProgressBarColor(p.percentageCompleted || 0)}" style="width: ${progressWidth}%">${p.percentageCompleted || 0}%</div>
                             </div>
                         </td>
-                        <td><small>${escapeHtml(p.owner.substring(0, 25))}</small></td>
+                        <td><small>${escapeHtml(p.owner.substring(0, 25))}</small><br><small class="text-muted">${escapeHtml(p.manager || '')}</small></td>
                         <td>
                             <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')" title="View Details">View</button>
                             <button class="btn btn-sm btn-outline-warning" onclick="openEditProjectModal('${escapeHtml(p.id)}')" title="Edit Project">Edit</button>
@@ -500,7 +500,7 @@
 
                                 <div class="row small mb-3 gx-1">
                                     <div class="col-6"><span class="text-muted">Phase:</span><br><strong>${p.phase}</strong></div>
-                                    <div class="col-6"><span class="text-muted">Owner:</span><br><strong>${escapeHtml(p.owner).substring(0, 20)}</strong></div>
+                                    <div class="col-6"><span class="text-muted">Owner:</span><br><strong>${escapeHtml(p.owner).substring(0, 20)}</strong><br><small class="text-muted">Mgr: ${escapeHtml(p.manager || 'N/A')}</small></div>
                                 </div>
 
                                 <small class="text-muted d-block mb-2">Due: ${p.deadline || "N/A"}</small>
