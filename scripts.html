@@ -241,8 +241,8 @@
                 
                 populateDropdowns();
                 renderHeader();
-                renderProjects();
                 applyRBAC();
+                initializeTabs();
                 
                 if (callback && typeof callback === 'function') {
                     callback();
@@ -283,8 +283,8 @@
                 console.log("4. Rendering Header...");
                 renderHeader();
 
-                console.log("5. Rendering Projects...");
-                renderProjects();
+                console.log("5. Initializing Tabs...");
+                initializeTabs();
 
                 console.log("6. Applying RBAC...");
                 applyRBAC();
@@ -689,23 +689,26 @@
             // Owner filter
             if (owner !== "All" && project.owner !== owner) return false;
             
-            // Date range filter - compare by ISO date string only (YYYY-MM-DD)
+            // Date range filter - safely compare ISO date strings
             if (dateFrom || dateTo) {
-                // Extract just the date part from lastUpdatedDate (works with localized strings)
                 let projectDateStr = "";
                 if (project.lastUpdatedDate) {
                     try {
+                        // Parse the localized date string and convert to ISO date (YYYY-MM-DD)
                         const d = new Date(project.lastUpdatedDate);
                         if (!isNaN(d.getTime())) {
-                            // Get ISO date string (YYYY-MM-DD)
                             projectDateStr = d.toISOString().split('T')[0];
                         }
                     } catch (e) {
-                        // If can't parse, skip this project for date filter
+                        // If parsing fails, skip date filter for this project
+                        console.warn("Could not parse date:", project.lastUpdatedDate);
                     }
                 }
                 
+                // If we can't determine project date, exclude from filtered results
                 if (!projectDateStr) return false;
+                
+                // String comparison works fine for ISO dates (YYYY-MM-DD format)
                 if (dateFrom && projectDateStr < dateFrom) return false;
                 if (dateTo && projectDateStr > dateTo) return false;
             }
@@ -1085,77 +1088,21 @@
         filteredProjects: []
     };
 
+    // ===  WARNING: OLD RENDERING SYSTEM - DO NOT USE ===
+    // This function is deprecated. Use the tab-based rendering system instead.
     function renderProjects() {
-        console.log(" -> renderProjects: Initialization.");
-        const grid = document.getElementById("projectsGrid");
-        const select = document.getElementById("aProjectSelect");
-
-        grid.innerHTML = "";
-        select.innerHTML = '<option value="">Select Project...</option>';
-
-        console.log(" -> renderProjects: Filtering appState projects.");
-        paginationState.filteredProjects = appState.projects.filter(passesFilters);
-        paginationState.currentPage = 1; // Reset to first page
-        console.log(" -> renderProjects: " + paginationState.filteredProjects.length + " projects passed the filter.");
-
-        if (paginationState.filteredProjects.length === 0) {
-            grid.innerHTML = "<div class='col-12 text-center text-muted py-5'>No matching projects.</div>";
-            return;
-        }
-
-        // Populate dropdown with all projects (for action assignment)
-        paginationState.filteredProjects.forEach(p => {
-            select.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`;
-        });
-
-        // Refresh assigned-to display after populating projects
-        updateAssignedTo();
-
-        // === PERFORMANCE: Render only first page ===
-        renderProjectsPage();
+        console.warn("renderProjects() called - old system disabled. Use tab-based rendering instead.");
+        return;
     }
 
     function renderProjectsPage() {
-        const grid = document.getElementById("projectsGrid");
-        const { currentPage, itemsPerPage, filteredProjects } = paginationState;
-        
-        const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
-        const startIndex = (currentPage - 1) * itemsPerPage;
-        const endIndex = Math.min(startIndex + itemsPerPage, filteredProjects.length);
-        const pageProjects = filteredProjects.slice(startIndex, endIndex);
-        
-        console.log(`Rendering page ${currentPage} of ${totalPages} (${startIndex}-${endIndex} of ${filteredProjects.length})`);
-        
-        // Add pagination controls at top
-        let paginationHTML = '';
-        if (totalPages > 1) {
-            paginationHTML = `
-                <div class="col-12 mb-3">
-                    <div class="d-flex justify-content-between align-items-center">
-                        <div>
-                            <span class="text-muted">Showing ${startIndex + 1}-${endIndex} of ${filteredProjects.length} projects</span>
-                        </div>
-                        <div class="btn-group" role="group">
-                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(1)" ${currentPage === 1 ? 'disabled' : ''}>First</button>
-                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>Previous</button>
-                            <button class="btn btn-sm btn-outline-secondary" disabled>Page ${currentPage} of ${totalPages}</button>
-                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next</button>
-                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''}>Last</button>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-        
-        grid.innerHTML = paginationHTML;
-        renderProjectsList(pageProjects, grid);
+        console.warn("renderProjectsPage() called - old system disabled.");
+        return;
     }
 
     function changePage(newPage) {
-        paginationState.currentPage = newPage;
-        renderProjectsPage();
-        // Scroll to top of results
-        document.getElementById('projectsGrid').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        console.warn("changePage() called - old system disabled. Use tab pagination instead.");
+        return;
     }
 
     function renderProjectsList(projects, grid) {
