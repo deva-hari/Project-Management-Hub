@@ -367,6 +367,12 @@ function getProjectsByStatus(status) {
             }
 
             if (canSeeAction) {
+                // Parse updates JSON safely
+                let parsedUpdates = [];
+                if (row[8] && typeof row[8] === 'string' && row[8].trim() !== "") {
+                    try { parsedUpdates = JSON.parse(row[8]); } catch (e) { }
+                }
+                
                 actions.push({
                     id: row[0],
                     projectId: row[1],
@@ -376,7 +382,7 @@ function getProjectsByStatus(status) {
                     percentageCompleted: row[5],
                     priority: row[6],
                     lastUpdated: row[7] ? new Date(row[7]).toLocaleString() : "",
-                    updates: row[8] || ""
+                    updates: parsedUpdates
                 });
             }
         } catch (err) {

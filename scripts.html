@@ -719,7 +719,7 @@
                                          action.status === "In Progress" ? "primary" : "secondary";
                 actionsHtml += `
                     <div class="d-flex justify-content-between align-items-center mt-1 p-2 bg-light rounded">
-                        <small>${escapeHtml(action.description || 'No description')}</small>
+                        <small>${escapeHtml(action.desc || 'No description')}</small>
                         <span class="badge bg-${actionStatusClass}">${escapeHtml(action.status)}</span>
                     </div>
                 `;
@@ -2101,8 +2101,16 @@
         } else {
             // Reverse to show newest at the top
             [...historyArray].reverse().forEach(log => {
-                const date = new Date(log.timestamp).toLocaleString();
+                // Safely parse timestamp
+                let date = "Unknown date";
+                if (log.timestamp) {
+                    const parsedDate = new Date(log.timestamp);
+                    if (!isNaN(parsedDate.getTime())) {
+                        date = parsedDate.toLocaleString();
+                    }
+                }
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
+                const userDisplay = log.user || "System";
                 
                 // Check if user can edit: Admin only
                 const canEdit = appState.role === 'Admin';
@@ -2111,13 +2119,13 @@
                   <div class="card mb-3 shadow-sm border-start border-success border-4 rounded-0">
                     <div class="card-body py-2">
                        <div class="d-flex justify-content-between align-items-center mb-1">
-                          <small class="fw-bold text-dark">${log.user}</small>
+                          <small class="fw-bold text-dark">${escapeHtml(userDisplay)}</small>
                           <div>
                             <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
-                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit log" onclick="openEditActionLogModal('${actionId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
+                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit log" onclick="openEditActionLogModal('${escapeHtml(actionId)}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
                           </div>
                        </div>
-                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                       <p class="mb-0 small">${escapeHtml(log.text)} ${statusBadge}</p>
                     </div>
                   </div>
                 `;
