@@ -745,6 +745,10 @@
         const detailModal = bootstrap.Modal.getInstance(document.getElementById('projectDetailModal'));
         if (detailModal) detailModal.hide();
         
+        // Reset the action form
+        const actionForm = document.getElementById('actionForm');
+        if (actionForm) actionForm.reset();
+        
         // Pre-select the project in the assign action modal
         const projectSelect = document.getElementById('aProjectSelect');
         if (projectSelect) {
@@ -753,7 +757,12 @@
         }
         
         // Open assign action modal
-        new bootstrap.Modal(document.getElementById('assignActionModal')).show();
+        const actionModal = document.getElementById('actionModal');
+        if (actionModal) {
+            new bootstrap.Modal(actionModal).show();
+        } else {
+            showAlert("Action modal not found. Please refresh the page.", "danger");
+        }
     }
 
 
@@ -1158,7 +1167,13 @@
 
         google.script.run
             .withSuccessHandler(res => {
-                bootstrap.Modal.getOrCreateInstance(document.getElementById('projectCommentModal')).hide();
+                // Close all open modals first
+                const allModals = document.querySelectorAll('.modal.show');
+                allModals.forEach(modal => {
+                    const instance = bootstrap.Modal.getInstance(modal);
+                    if (instance) instance.hide();
+                });
+                
                 btn.disabled = false;
                 btn.innerHTML = "Add Comment";
 
@@ -1218,11 +1233,8 @@
                 const date = new Date(log.timestamp).toLocaleString();
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
                 
-                // Check if user can edit: Admin, action owner, project owner, or the log author
-                const canEdit = appState.role === 'Admin' || 
-                              log.user === appState.email || 
-                              actionOwner === appState.email || 
-                              projectOwner === appState.email;
+                // Check if user can edit: Admin only
+                const canEdit = appState.role === 'Admin';
 
                 container.innerHTML += `
                   <div class="card mb-3 shadow-sm border-start border-success border-4 rounded-0">
@@ -1287,8 +1299,18 @@
         // Pre-fill the textarea
         document.getElementById('editActionLogText').value = currentText;
         
-        // Show the modal
-        new bootstrap.Modal(editModal).show();
+        // Show the modal with proper z-index management
+        const modal = new bootstrap.Modal(editModal);
+        modal.show();
+        
+        // Force z-index after Bootstrap renders the modal
+        setTimeout(() => {
+            editModal.style.setProperty('z-index', '9999', 'important');
+            const backdrop = document.querySelector('.modal-backdrop');
+            if (backdrop) {
+                backdrop.style.setProperty('z-index', '9998', 'important');
+            }
+        }, 50);
     }
 
     function handleEditActionLogSubmit(e) {
@@ -1312,14 +1334,16 @@
         // Call backend
         google.script.run
             .withSuccessHandler(function(result) {
+                // Close all open modals first
+                const allModals = document.querySelectorAll('.modal.show');
+                allModals.forEach(modal => {
+                    const instance = bootstrap.Modal.getInstance(modal);
+                    if (instance) instance.hide();
+                });
+                
                 showAlert(result || 'Action log updated successfully!', 'success');
                 // Reload dashboard to get updated data
-                loadDashboard(function() {
-                    // Refresh the project detail view if it's still open
-                    if (appState.currentProjectId) {
-                        expandProjectDetail(appState.currentProjectId);
-                    }
-                });
+                loadDashboard();
             })
             .withFailureHandler(function(error) {
                 showAlert('Error updating action log: ' + error.message, 'danger');
@@ -1371,7 +1395,7 @@
             [...historyArray].reverse().forEach(log => {
                 const date = new Date(log.timestamp).toLocaleString();
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
-                const canEdit = appState.role === 'Admin' || log.user === appState.email;
+                const canEdit = appState.role === 'Admin';
                 const canDelete = appState.role === 'Admin';
                 
                 container.innerHTML += `
@@ -1438,8 +1462,18 @@
         // Pre-fill the textarea
         document.getElementById('editNoteText').value = currentText;
         
-        // Show the modal
-        new bootstrap.Modal(editModal).show();
+        // Show the modal with proper z-index management
+        const modal = new bootstrap.Modal(editModal);
+        modal.show();
+        
+        // Force z-index after Bootstrap renders the modal
+        setTimeout(() => {
+            editModal.style.setProperty('z-index', '9999', 'important');
+            const backdrop = document.querySelector('.modal-backdrop');
+            if (backdrop) {
+                backdrop.style.setProperty('z-index', '9998', 'important');
+            }
+        }, 50);
     }
 
     function handleEditNoteSubmit(e) {
@@ -1463,15 +1497,16 @@
         // Call backend
         google.script.run
             .withSuccessHandler(function(result) {
+                // Close all open modals first
+                const allModals = document.querySelectorAll('.modal.show');
+                allModals.forEach(modal => {
+                    const instance = bootstrap.Modal.getInstance(modal);
+                    if (instance) instance.hide();
+                });
+                
                 showAlert(result || 'Note updated successfully!', 'success');
                 // Reload dashboard to get updated data
-                loadDashboard(function() {
-                    // Refresh the notes modal if it's still open
-                    const historyModal = document.getElementById('historyModal');
-                    if (historyModal && historyModal.classList.contains('show')) {
-                        openProjectNotesModal(projectId);
-                    }
-                });
+                loadDashboard();
             })
             .withFailureHandler(function(error) {
                 showAlert('Error updating note: ' + error.message, 'danger');
@@ -1493,7 +1528,7 @@
             [...historyArray].reverse().forEach(log => {
                 const date = new Date(log.timestamp).toLocaleString();
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-1">${log.status}</span>` : "";
-                const canEdit = appState.role === 'Admin' || log.user === appState.email;
+                const canEdit = appState.role === 'Admin';
                 const canDelete = appState.role === 'Admin';
                 
                 container.innerHTML += `
