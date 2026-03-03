@@ -6,6 +6,72 @@ const SHEET_NAMES = {
     SETTINGS: "Settings"
 };
 
+// --- UTILITY: IST Timezone Formatter ---
+// Converts dates to Indian Standard Time (IST, UTC+5:30)
+function formatDateToIST(dateInput) {
+    if (!dateInput) return "";
+    
+    try {
+        let date;
+        if (typeof dateInput === 'string') {
+            date = new Date(dateInput);
+        } else if (dateInput instanceof Date) {
+            date = dateInput;
+        } else {
+            return "";
+        }
+        
+        if (isNaN(date.getTime())) return "";
+        
+        // Use toLocaleString with Asia/Kolkata timezone - it handles the UTC+5:30 conversion automatically
+        const options = {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: 'Asia/Kolkata'
+        };
+        
+        const formatted = date.toLocaleString('en-US', options) + ' IST';
+        return formatted;
+    } catch (e) {
+        Logger.log("Error formatting date to IST: " + e.toString());
+        return "";
+    }
+}
+
+// Format date only (without time) for IST
+function formatDateOnlyIST(dateInput) {
+    if (!dateInput) return "";
+    
+    try {
+        let date;
+        if (typeof dateInput === 'string') {
+            date = new Date(dateInput);
+        } else if (dateInput instanceof Date) {
+            date = dateInput;
+        } else {
+            return "";
+        }
+        
+        if (isNaN(date.getTime())) return "";
+        
+        const options = {
+            year: 'numeric',
+            month: 'short',
+            day: '2-digit',
+            timeZone: 'Asia/Kolkata'
+        };
+        
+        return date.toLocaleString('en-US', options);
+    } catch (e) {
+        Logger.log("Error formatting date: " + e.toString());
+        return "";
+    }
+}
+
 // --- ROUTING ---
 function doGet(e) {
     const userEmail = Session.getActiveUser().getEmail();
@@ -316,13 +382,13 @@ function getProjectsByStatus(status) {
                     status: projectStatus,
                     phase: row[5],
                     percentageCompleted: row[6],
-                    startDate: row[7] ? new Date(row[7]).toLocaleDateString() : "",
-                    deadline: row[8] ? new Date(row[8]).toLocaleDateString() : "",
+                    startDate: row[7] ? formatDateOnlyIST(row[7]) : "",
+                    deadline: row[8] ? formatDateOnlyIST(row[8]) : "",
                     outcomes: row[9],
                     risks: row[10],
                     lastUpdatedText: row[11],
-                    createdAt: row[12] ? new Date(row[12]).toLocaleString() : "",
-                    lastUpdatedDate: row[13] ? new Date(row[13]).toLocaleString() : "",
+                    createdAt: row[12] ? formatDateToIST(row[12]) : "",
+                    lastUpdatedDate: row[13] ? formatDateToIST(row[13]) : "",
                     projectType: row[15] || "Other",
                     commentCount: commentCount,
                     lastComment: lastComment
@@ -381,7 +447,7 @@ function getProjectsByStatus(status) {
                     status: row[4],
                     percentageCompleted: row[5],
                     priority: row[6],
-                    lastUpdated: row[7] ? new Date(row[7]).toLocaleString() : "",
+                    lastUpdated: row[7] ? formatDateToIST(row[7]) : "",
                     updates: parsedUpdates
                 });
             }
@@ -1472,7 +1538,7 @@ function sendTaskAssignmentEmail(action) {
         <p><strong>Task ID:</strong> ${action.id}</p>
         <p><strong>Status:</strong> ${action.status}</p>
         <p><strong>Priority:</strong> ${action.priority}</p>
-        <p><strong>Assigned At:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>Assigned At:</strong> ${formatDateToIST(new Date())}</p>
       </div>
       
       <div style="background-color: #e7f3ff; border-left: 4px solid #0066cc; padding: 15px; margin: 20px 0;">
@@ -1496,6 +1562,7 @@ Task: ${action.desc}
 Task ID: ${action.id}
 Status: ${action.status}
 Priority: ${action.priority}
+Assigned At: ${formatDateToIST(new Date())}
 
 Please log in to the Project Management Hub to view and update this task.
 
@@ -1548,7 +1615,7 @@ function sendProjectNoteNotification(projectId, projectName, projectOwner, noteA
         <p><strong>Project:</strong> ${projectName}</p>
         <p><strong>Project ID:</strong> ${projectId}</p>
         <p><strong>Note By:</strong> ${noteAuthor}</p>
-        <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+        <p><strong>Time:</strong> ${formatDateToIST(new Date())}</p>
       </div>
       
       <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
@@ -1576,7 +1643,7 @@ function sendProjectNoteNotification(projectId, projectName, projectOwner, noteA
     Project: ${projectName}
     Project ID: ${projectId}
     Note By: ${noteAuthor}
-    Time: ${new Date().toLocaleString()}
+    Time: ${formatDateToIST(new Date())}
     
     Note:
     ${noteText}
@@ -1602,6 +1669,108 @@ function sendProjectNoteNotification(projectId, projectName, projectOwner, noteA
         Logger.log('sendProjectNoteNotification: attempting to send to: ' + projectOwner);
         Logger.log('sendProjectNoteNotification: error: ' + (e && e.toString ? e.toString() : JSON.stringify(e)));
         // Don't throw - we don't want email failures to block the note from being saved
+    }
+}
+
+function sendProjectUpdateNotification(projectId, projectName, projectOwner, projectManager, updatedBy, changes) {
+    // Validate inputs
+    if (!projectOwner && !projectManager) {
+        Logger.log('sendProjectUpdateNotification: No valid recipients');
+        return;
+    }
+
+    const subject = `Project Updated: ${projectName}`;
+    
+    // Build change details HTML
+    let changesHTML = '';
+    if (changes.status) changesHTML += `<li><strong>Status:</strong> ${changes.status}</li>`;
+    if (changes.phase) changesHTML += `<li><strong>Phase:</strong> ${changes.phase}</li>`;
+    if (changes.percentage !== undefined) changesHTML += `<li><strong>Completion:</strong> ${changes.percentage}%</li>`;
+    if (changes.startDate) changesHTML += `<li><strong>Start Date:</strong> ${changes.startDate}</li>`;
+    if (changes.deadline) changesHTML += `<li><strong>Deadline:</strong> ${changes.deadline}</li>`;
+    if (changes.type) changesHTML += `<li><strong>Project Type:</strong> ${changes.type}</li>`;
+    if (changes.note) changesHTML += `<li><strong>Update Note:</strong> ${changes.note}</li>`;
+
+    // Create HTML body
+    const htmlBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #0066cc;">Project Update Notification</h2>
+      
+      <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <p><strong>Project:</strong> ${projectName}</p>
+        <p><strong>Project ID:</strong> ${projectId}</p>
+        <p><strong>Updated By:</strong> ${updatedBy}</p>
+        <p><strong>Update Time:</strong> ${formatDateToIST(new Date())}</p>
+      </div>
+      
+      <div style="background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0;">
+        <strong>Changes Made:</strong>
+        <ul style="margin: 10px 0; padding-left: 20px;">
+          ${changesHTML}
+        </ul>
+      </div>
+      
+      <p style="color: #666; font-size: 14px; margin-top: 30px;">
+        Please log in to the Project Management Hub to view all project details.
+      </p>
+      
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      
+      <p style="color: #999; font-size: 12px;">
+        This is an automated notification from the Project Management Hub. 
+        Please do not reply to this email.
+      </p>
+    </div>
+    `;
+
+    // Plain text fallback
+    const plainBody = `
+Project Update Notification
+
+Project: ${projectName}
+Project ID: ${projectId}
+Updated By: ${updatedBy}
+Update Time: ${formatDateToIST(new Date())}
+
+Changes Made:
+${Object.entries(changes).map(([key, val]) => `- ${key}: ${val}`).join('\n')}
+
+Please log in to the Project Management Hub to view all project details.
+
+---
+This is an automated notification from the Project Management Hub.
+Please do not reply to this email.
+    `;
+
+    try {
+        // Send to project owner if available
+        if (projectOwner) {
+            MailApp.sendEmail({
+                to: projectOwner,
+                subject: subject,
+                body: plainBody,
+                htmlBody: htmlBody,
+                name: 'Project Management Hub',
+                replyTo: 'no-reply@example.com'
+            });
+            Logger.log(`Sent project update notification to owner: ${projectOwner}`);
+        }
+        
+        // Send to project manager if different from owner
+        if (projectManager && projectManager !== projectOwner) {
+            MailApp.sendEmail({
+                to: projectManager,
+                subject: subject,
+                body: plainBody,
+                htmlBody: htmlBody,
+                name: 'Project Management Hub',
+                replyTo: 'no-reply@example.com'
+            });
+            Logger.log(`Sent project update notification to manager: ${projectManager}`);
+        }
+    } catch (e) {
+        Logger.log('sendProjectUpdateNotification: error: ' + (e && e.toString ? e.toString() : JSON.stringify(e)));
+        // Don't throw - we don't want email failures to block the update
     }
 }
 
@@ -1745,6 +1914,7 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
     
     const projectOwner = projectData[projectRowIndex][2];
     const projectManager = projectData[projectRowIndex][3];
+    const projectName = projectData[projectRowIndex][1];
     
     // Authorization: Admin, Owner, or Manager
     const canUpdate = (
@@ -1757,32 +1927,42 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
         throw new Error("You don't have permission to update this project");
     }
     
+    // Track changes for email notification
+    const changes = {};
+    
     // Update the fields
     const timestamp = new Date().toISOString();
     
     if (newStatus) {
         projectSheet.getRange(projectRowIndex + 1, 5).setValue(newStatus);
+        changes.status = newStatus;
     }
     
     if (newPhase) {
         projectSheet.getRange(projectRowIndex + 1, 6).setValue(newPhase);
+        changes.phase = newPhase;
     }
     
     if (newPercentage !== undefined && newPercentage !== null) {
-        projectSheet.getRange(projectRowIndex + 1, 7).setValue(parseInt(newPercentage) || 0);
+        const percentValue = parseInt(newPercentage) || 0;
+        projectSheet.getRange(projectRowIndex + 1, 7).setValue(percentValue);
+        changes.percentage = percentValue;
     }
     
     // allow type change as well
     if (newType !== undefined && newType !== null) {
         projectSheet.getRange(projectRowIndex + 1, 16).setValue(newType);
+        changes.type = newType;
     }
     
     // optional date updates
     if (newStart !== undefined && newStart !== null) {
         projectSheet.getRange(projectRowIndex + 1, 8).setValue(newStart);
+        changes.startDate = newStart;
     }
     if (newDeadline !== undefined && newDeadline !== null) {
         projectSheet.getRange(projectRowIndex + 1, 9).setValue(newDeadline);
+        changes.deadline = newDeadline;
     }
     
     // Update lastUpdatedDate (column 14)
@@ -1791,6 +1971,7 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
     // Update lastUpdatedText (column 12) if note provided
     if (updateNote) {
         projectSheet.getRange(projectRowIndex + 1, 12).setValue(updateNote);
+        changes.note = updateNote;
         
         // ALSO add to comments array (column 15) so it shows in history
         let currentComments = [];
@@ -1812,6 +1993,14 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
     }
     
     Logger.log("Project " + projectId + " updated by " + email + ": Status=" + newStatus + ", Phase=" + newPhase + ", %=" + newPercentage + ", start=" + newStart + ", deadline=" + newDeadline + ", type=" + newType);
+    
+    // Send notification email with changes
+    try {
+        sendProjectUpdateNotification(projectId, projectName, projectOwner, projectManager, email, changes);
+    } catch (e) {
+        Logger.log("Error sending update notification: " + e.toString());
+        // Don't fail the update if email fails
+    }
     
     return "Project updated successfully";
 }

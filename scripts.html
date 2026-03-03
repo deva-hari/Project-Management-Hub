@@ -7,68 +7,72 @@
         return div.innerHTML;
     }
 
-    // === PERFORMANCE: Session cache with 30-second TTL for client-side caching ===
+    // === Client-side IST Timezone Formatter ===
+    function formatDateToIST(dateInput) {
+        if (!dateInput) return "";
+        
+        try {
+            const date = new Date(dateInput);
+            if (isNaN(date.getTime())) return "Unknown date";
+            
+            // Use toLocaleString with Asia/Kolkata timezone
+            const options = {
+                year: 'numeric',
+                month: 'short',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true,
+                timeZone: 'Asia/Kolkata'
+            };
+            
+            return date.toLocaleString('en-US', options) + ' IST';
+        } catch (e) {
+            console.error("Error formatting date to IST:", e);
+            return "Unknown date";
+        }
+    }
+
+    // === PERFORMANCE: Simple cache for static data only (users, settings, role) ===
+    // Project/action data is NOT cached - always fetched fresh to avoid stale data issues
     const SESSION_CACHE = {
-        data: null,
+        staticData: null,
         timestamp: null,
-        TTL_MS: 30000, // 30 seconds
+        TTL_MS: 300000, // 5 minutes for static data (rarely changes)
         
         set: function(data) {
-            this.data = data;
+            // Only cache static data that rarely changes
+            this.staticData = {
+                email: data.email,
+                role: data.role,
+                users: data.users,
+                settings: data.settings
+            };
             this.timestamp = Date.now();
-            // Also persist to sessionStorage for page refreshes
-            try {
-                sessionStorage.setItem('dashboardCache', JSON.stringify({
-                    data: data,
-                    timestamp: this.timestamp
-                }));
-            } catch (e) {
-                console.warn('SessionStorage not available:', e);
-            }
+            console.log('✓ Cached static data (users, settings, role)');
         },
         
         get: function() {
-            // Check memory cache first
-            if (this.data && this.timestamp && (Date.now() - this.timestamp < this.TTL_MS)) {
-                return this.data;
+            if (this.staticData && this.timestamp && (Date.now() - this.timestamp < this.TTL_MS)) {
+                console.log('✓ Using cached static data (age: ' + Math.round((Date.now() - this.timestamp) / 1000) + 's)');
+                return this.staticData;
             }
-            
-            // Try sessionStorage
-            try {
-                const cached = sessionStorage.getItem('dashboardCache');
-                if (cached) {
-                    const parsed = JSON.parse(cached);
-                    if (Date.now() - parsed.timestamp < this.TTL_MS) {
-                        this.data = parsed.data;
-                        this.timestamp = parsed.timestamp;
-                        return this.data;
-                    }
-                }
-            } catch (e) {
-                console.warn('Error reading cache:', e);
-            }
-            
             return null;
         },
         
         invalidate: function() {
-            this.data = null;
+            this.staticData = null;
             this.timestamp = null;
-            try {
-                sessionStorage.removeItem('dashboardCache');
-            } catch (e) {}
-        },
-        
-        // Update specific project or action without full reload
-        updateItem: function(type, id, updates) {
-            if (!this.data || !this.data[type]) return;
-            const index = this.data[type].findIndex(item => item.id === id);
-            if (index !== -1) {
-                this.data[type][index] = { ...this.data[type][index], ...updates };
-                this.set(this.data); // Re-save to storage
-            }
+            console.log('✗ Static cache cleared');
         }
     };
+    
+    // Helper: Clear ALL caches (static + tab data)
+    function clearAllCaches() {
+        console.log('🔄 Clearing all caches (static + tab data)');
+        SESSION_CACHE.invalidate();
+        tabState.tabData = {};
+    }
     
     // === PERFORMANCE: Debounce utility for filter operations ===
     function debounce(func, wait) {
@@ -222,33 +226,36 @@
     // --- API Calls ---
     // loadDashboard optionally accepts a callback that's executed after the state is updated
     function loadDashboard(callback, forceRefresh = false) {
-        console.log("1. Starting loadDashboard()...");
+        console.log("🔄 Starting loadDashboard() [forceRefresh=" + forceRefresh + "]...");
         
-        // === PERFORMANCE: Check cache first (unless force refresh) ===
-        if (!forceRefresh) {
-            const cached = SESSION_CACHE.get();
-            if (cached) {
-                console.log("2. Using cached data (age: " + (Date.now() - SESSION_CACHE.timestamp) + "ms)");
-                appState = {
-                    email: cached.email || "",
-                    role: cached.role || "",
-                    projects: cached.projects || [],
-                    actions: cached.actions || [],
-                    settings: cached.settings || { projectTypes: [], phases: [], statuses: [] },
-                    metrics: cached.metrics || {}
-                };
-                window.allUsers = cached.users || [];
-                
-                populateDropdowns();
-                renderHeader();
-                applyRBAC();
-                initializeTabs();
-                
-                if (callback && typeof callback === 'function') {
-                    callback();
-                }
-                return; // Skip server call
+        // If force refresh, clear all caches first
+        if (forceRefresh) {
+            clearAllCaches();
+        }
+        
+        // === PERFORMANCE: Check static data cache only (users, settings, role) ===
+        const cachedStatic = SESSION_CACHE.get();
+        if (cachedStatic && !forceRefresh) {
+            console.log("✓ Using cached static data, will load tab data fresh");
+            appState = {
+                email: cachedStatic.email || "",
+                role: cachedStatic.role || "",
+                settings: cachedStatic.settings || { projectTypes: [], phases: [], statuses: [] },
+                projects: [],
+                actions: [],
+                metrics: {}
+            };
+            window.allUsers = cachedStatic.users || [];
+            
+            populateDropdowns();
+            renderHeader();
+            applyRBAC();
+            initializeTabs();
+            
+            if (callback && typeof callback === 'function') {
+                callback();
             }
+            return; // Skip server call
         }
         
         setGlobalLoading(true, "Refreshing dashboard...");
@@ -262,15 +269,15 @@
                     return;
                 }
                 
-                // === PERFORMANCE: Cache the response ===
+                // === PERFORMANCE: Cache only static data ===
                 SESSION_CACHE.set(data);
                 
                 appState = {
                     email: data.email || "",
                     role: data.role || "",
-                    projects: data.projects || [],
-                    actions: data.actions || [],
                     settings: data.settings || { projectTypes: [], phases: [], statuses: [] },
+                    projects: [],
+                    actions: [],
                     metrics: data.metrics || {}
                 };
 
@@ -335,6 +342,11 @@
             const statusClass = getStatusClass(status);
             const tabId = `tab-${status.replace(/\s+/g, '-')}`;
             
+            // Get count from cached tab data if available
+            const tabData = tabState.tabData[status];
+            const count = tabData ? tabData.projects.length : 0;
+            const label = count > 0 ? `${status} - ${count}` : status;
+            
             html += `
                 <li class="nav-item" role="presentation">
                     <button class="nav-link ${isActive}" id="${tabId}" 
@@ -343,13 +355,32 @@
                             type="button" 
                             role="tab"
                             onclick="switchTab('${escapeHtml(status)}')">
-                        <span class="badge ${statusClass}">${escapeHtml(status)}</span>
+                        <span class="badge ${statusClass}">${escapeHtml(label)}</span>
                     </button>
                 </li>
             `;
         });
         
         tabsContainer.innerHTML = html;
+    }
+    
+    /**
+     * Update the project count badge for a specific tab
+     */
+    function updateTabCount(status) {
+        const tabId = `tab-${status.replace(/\s+/g, '-')}`;
+        const tabButton = document.getElementById(tabId);
+        if (!tabButton) return;
+        
+        const tabData = tabState.tabData[status];
+        const count = tabData ? tabData.projects.length : 0;
+        const label = count > 0 ? `${status} - ${count}` : status;
+        
+        // Update the status badge text with new label
+        const statusBadge = tabButton.querySelector('.badge');
+        if (statusBadge) {
+            statusBadge.textContent = label;
+        }
     }
     
     /**
@@ -381,9 +412,18 @@
     
     /**
      * Load projects and actions for a specific status tab
+     * @param {string} status - Status to load
+     * @param {boolean} forceRefresh - If true, clears cache before loading
      */
-    function loadTabData(status) {
-        console.log("Loading data for tab:", status);
+    function loadTabData(status, forceRefresh = false) {
+        console.log(`🔄 Loading tab: ${status} [forceRefresh=${forceRefresh}]`);
+        
+        // If force refresh, clear this tab's cache
+        if (forceRefresh && tabState.tabData[status]) {
+            delete tabState.tabData[status];
+            console.log(`✗ Cleared cache for ${status} tab`);
+        }
+        
         setGlobalLoading(true, `Loading ${status === "All" ? "all" : status} projects...`);
         
         const tabContent = document.getElementById("statusTabContent");
@@ -398,7 +438,7 @@
         
         google.script.run
             .withSuccessHandler(data => {
-                console.log(`Tab data received for ${status}:`, data.projects.length, "projects");
+                console.log(`✓ Received ${data.projects.length} projects for ${status} tab`);
                 
                 // Cache the tab data
                 tabState.tabData[status] = {
@@ -406,6 +446,9 @@
                     actions: data.actions || [],
                     currentPage: 1
                 };
+                
+                // Update tab count badge
+                updateTabCount(status);
                 
                 renderTabContent(status);
                 setGlobalLoading(false);
@@ -417,7 +460,7 @@
                     tabContent.innerHTML = `
                         <div class='col-12 text-center text-danger py-5'>
                             Failed to load projects. 
-                            <button class="btn btn-primary btn-sm mt-2" onclick="loadTabData('${status}')">Retry</button>
+                            <button class="btn btn-primary btn-sm mt-2" onclick="loadTabData('${status}', true)">Retry</button>
                         </div>
                     `;
                 }
@@ -567,24 +610,22 @@
      */
     function refreshCurrentTab() {
         const status = tabState.currentStatus;
-        console.log("Refreshing current tab:", status);
+        console.log("🔄 Manual refresh: Current tab (", status, ")");
         
-        // Clear cached data for this tab
-        delete tabState.tabData[status];
+        // Force refresh (clears cache)
+        loadTabData(status, true);
         
-        // Reload
-        loadTabData(status);
+        showAlert("Tab refreshed", "info");
     }
     
     /**
      * Refresh all tabs and clear all caches
      */
     function refreshAll() {
-        console.log("Refreshing all data and clearing caches");
+        console.log("🔄 Manual refresh: All data");
         
         // Clear all caches
-        SESSION_CACHE.invalidate();
-        tabState.tabData = {};
+        clearAllCaches();
         
         // Reload settings and tabs
         setGlobalLoading(true, "Clearing cache and reloading...");
@@ -632,7 +673,15 @@
      * Refresh a single project's data
      */
     function refreshProject(projectId) {
-        console.log("Refreshing project:", projectId);
+        console.log("🔄 Manual refresh: Single project", projectId);
+        
+        // Clear cache for current tab to ensure fresh data
+        const status = tabState.currentStatus;
+        if (tabState.tabData[status]) {
+            delete tabState.tabData[status];
+            console.log(`✗ Cleared ${status} tab cache before refresh`);
+        }
+        
         setGlobalLoading(true, "Refreshing project...");
         
         google.script.run
@@ -663,7 +712,17 @@
                         // Re-render current tab
                         renderTabContent(status);
                         showAlert("Project refreshed", "success");
+                    } else {
+                        // Project not in current tab, reload entire dashboard
+                        console.warn("Project not found in current tab, reloading dashboard");
+                        clearAllCaches();
+                        loadDashboard(null, true);
                     }
+                } else {
+                    // Tab not available, reload entire dashboard
+                    console.warn("Tab data not available, reloading dashboard");
+                    clearAllCaches();
+                    loadDashboard(null, true);
                 }
             })
             .withFailureHandler(err => {
@@ -682,12 +741,20 @@
         const dateFrom = document.getElementById("filterDateFrom")?.value || "";
         const dateTo = document.getElementById("filterDateTo")?.value || "";
         
-        return projects.filter(project => {
+        console.log("Applying filters - phase:", phase, "owner:", owner, "dateFrom:", dateFrom, "dateTo:", dateTo, "projects:", projects.length);
+        
+        const filtered = projects.filter(project => {
             // Phase filter
-            if (phase !== "All" && project.phase !== phase) return false;
+            if (phase !== "All" && project.phase !== phase) {
+                console.log(`Project ${project.id} filtered out: phase mismatch`);
+                return false;
+            }
             
             // Owner filter
-            if (owner !== "All" && project.owner !== owner) return false;
+            if (owner !== "All" && project.owner !== owner) {
+                console.log(`Project ${project.id} filtered out: owner mismatch`);
+                return false;
+            }
             
             // Date range filter - safely compare ISO date strings
             if (dateFrom || dateTo) {
@@ -700,21 +767,32 @@
                             projectDateStr = d.toISOString().split('T')[0];
                         }
                     } catch (e) {
-                        // If parsing fails, skip date filter for this project
                         console.warn("Could not parse date:", project.lastUpdatedDate);
                     }
                 }
                 
-                // If we can't determine project date, exclude from filtered results
-                if (!projectDateStr) return false;
+                // If we can't determine project date and filter is active, exclude it
+                if (!projectDateStr && (dateFrom || dateTo)) {
+                    console.log(`Project ${project.id} filtered out: no valid date`);
+                    return false;
+                }
                 
                 // String comparison works fine for ISO dates (YYYY-MM-DD format)
-                if (dateFrom && projectDateStr < dateFrom) return false;
-                if (dateTo && projectDateStr > dateTo) return false;
+                if (dateFrom && projectDateStr < dateFrom) {
+                    console.log(`Project ${project.id} filtered out: before dateFrom`);
+                    return false;
+                }
+                if (dateTo && projectDateStr > dateTo) {
+                    console.log(`Project ${project.id} filtered out: after dateTo`);
+                    return false;
+                }
             }
             
             return true;
         });
+        
+        console.log(`Filtered from ${projects.length} to ${filtered.length} projects`);
+        return filtered;
     }
     
     /**
@@ -848,63 +926,6 @@
         uniqueProjects.forEach(p => {
             select.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`;
         });
-    }
-
-    // --- Original load dashboard - now just loads settings and initializes tabs ---
-    function loadDashboard(callback, forceRefresh = false) {
-        console.log("1. Starting loadDashboard()...");
-        
-        setGlobalLoading(true, "Loading dashboard...");
-        google.script.run
-            .withSuccessHandler(data => {
-                console.log("2. Dashboard data received");
-                
-                if (!data) {
-                    showAlert("No data returned from server", "danger");
-                    setGlobalLoading(false);
-                    return;
-                }
-                
-                appState = {
-                    email: data.email || "",
-                    role: data.role || "",
-                    projects: [],
-                    actions: [],
-                    settings: data.settings || { projectTypes: [], phases: [], statuses: [] },
-                    metrics: data.metrics || {},
-                    currentProjectId: appState.currentProjectId
-                };
-
-                window.allUsers = data.users || [];
-
-                console.log("3. Populating Dropdowns...");
-                populateDropdowns();
-
-                console.log("4. Rendering Header...");
-                renderHeader();
-
-                console.log("5. Initializing Tabs...");
-                initializeTabs();
-
-                console.log("6. Applying RBAC...");
-                applyRBAC();
-
-                console.log("7. Dashboard load successfully finished.");
-                if (callback && typeof callback === 'function') {
-                    callback();
-                }
-                setGlobalLoading(false);
-            })
-            .withFailureHandler(err => {
-                console.error("Dashboard load failed:", err);
-                const tabContent = document.getElementById("statusTabContent");
-                if (tabContent) {
-                    tabContent.innerHTML = `<div class='col-12 text-center text-danger py-5'>Failed to load data. Please refresh.</div>`;
-                }
-                showAlert("Error loading dashboard: " + err.message, "danger");
-                setGlobalLoading(false);
-            })
-            .getDashboardData();
     }
 
     // --- Renderers ---
@@ -1697,8 +1718,9 @@
                 btn.disabled = false;
                 btn.innerHTML = "Assign Action";
 
-                showAlert("Assigning...", "success");
-                loadDashboard();
+                showAlert("Action assigned successfully!", "success");
+                clearAllCaches();
+                loadDashboard(null, true);
             })
             .withFailureHandler(err => {
                 showAlert(err.message, "danger");
@@ -1946,6 +1968,8 @@
         const deadline = document.getElementById("editProjectDeadline").value || null;
         const note = document.getElementById("editProjectNote").value.trim();
 
+        console.log("Updating project:", {projectId, status, phase, percentage, startDate, deadline, note, type});
+
         // validation
         if (!status) {
             showAlert("Status is required", "danger");
@@ -1962,16 +1986,18 @@
 
         google.script.run
             .withSuccessHandler(res => {
+                console.log("Update response:", res);
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('editProjectModal')).hide();
                 btn.disabled = false;
                 btn.innerHTML = "Save Changes";
 
                 showAlert("Project updated successfully!", "success");
-                // === PERFORMANCE: Clear caches and refresh affected project ===
-                SESSION_CACHE.invalidate();
-                refreshProject(projectId);
+                // Clear all caches since project status might have changed
+                clearAllCaches();
+                loadDashboard(null, true);
             })
             .withFailureHandler(err => {
+                console.error("Update error:", err);
                 showAlert("Error: " + err.message, "danger");
                 btn.disabled = false;
                 btn.innerHTML = "Save Changes";
@@ -2004,7 +2030,7 @@
 
                 showAlert("Comment added.", "success");
                 
-                // === PERFORMANCE: Refresh only the affected project ===
+                // Refresh the project (will clear tab cache automatically)
                 refreshProject(pId);
                 
                 setGlobalLoading(false);
@@ -2027,7 +2053,7 @@
         } else {
             // Reverse to show newest at the top
             [...historyArray].reverse().forEach(log => {
-                const date = new Date(log.timestamp).toLocaleString();
+                const date = formatDateToIST(log.timestamp);
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
 
                 container.innerHTML += `
@@ -2059,12 +2085,12 @@
         } else {
             // Reverse to show newest at the top
             [...historyArray].reverse().forEach(log => {
-                // Safely parse timestamp
+                // Safely parse timestamp and format to IST
                 let date = "Unknown date";
                 if (log.timestamp) {
                     const parsedDate = new Date(log.timestamp);
                     if (!isNaN(parsedDate.getTime())) {
-                        date = parsedDate.toLocaleString();
+                        date = formatDateToIST(log.timestamp);
                     }
                 }
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
@@ -2180,7 +2206,8 @@
                 
                 showAlert(result || 'Action log updated successfully!', 'success');
                 // Reload dashboard to get updated data
-                loadDashboard();
+                clearAllCaches();
+                loadDashboard(null, true);
             })
             .withFailureHandler(function(error) {
                 showAlert('Error updating action log: ' + error.message, 'danger');
@@ -2230,7 +2257,7 @@
             container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
         } else {
             [...historyArray].reverse().forEach(log => {
-                const date = new Date(log.timestamp).toLocaleString();
+                const date = formatDateToIST(log.timestamp);
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
                 const canEdit = appState.role === 'Admin';
                 const canDelete = appState.role === 'Admin';
@@ -2363,7 +2390,7 @@
             container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
         } else {
             [...historyArray].reverse().forEach(log => {
-                const date = new Date(log.timestamp).toLocaleString();
+                const date = formatDateToIST(log.timestamp);
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-1">${log.status}</span>` : "";
                 const canEdit = appState.role === 'Admin';
                 const canDelete = appState.role === 'Admin';
@@ -2492,7 +2519,8 @@
         google.script.run
             .withSuccessHandler(res => {
                 showAlert(res, "success");
-                loadDashboard();
+                clearAllCaches();
+                loadDashboard(null, true);
                 // close any open project modals
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('projectDetailModal')).hide();
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('editProjectModal')).hide();
@@ -2510,7 +2538,8 @@
         google.script.run
             .withSuccessHandler(res => { 
                 showAlert(res, "success"); 
-                loadDashboard(); 
+                clearAllCaches();
+                loadDashboard(null, true); 
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('projectDetailModal')).hide();
             })
             .withFailureHandler(err => {
@@ -2527,7 +2556,8 @@
             .withSuccessHandler(res => {
                 showAlert(res, "success");
                 // reload state then update the history panel
-                loadDashboard(() => refreshHistoryContent(projectId));
+                clearAllCaches();
+                loadDashboard(() => refreshHistoryContent(projectId), true);
             })
             .withFailureHandler(err => {
                 showAlert(err.message, "danger");
@@ -2570,7 +2600,8 @@
             document.getElementById("mainHeading").innerText = "Dashboard";
             document.getElementById("btnAdminPanel").innerText = "Admin Panel";
             document.getElementById("btnAdminPanel").classList.replace("btn-warning", "btn-outline-light");
-            loadDashboard(); // Refresh state from any settings changes
+            clearAllCaches();
+            loadDashboard(null, true); // Refresh state from any settings changes
         }
     }
 
