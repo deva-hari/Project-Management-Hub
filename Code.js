@@ -669,6 +669,85 @@ function updateActionStatus(actionId, newStatus, pctComplete, updateNote) {
     return "Action updated successfully!";
 }
 
+function editActionUpdate(actionId, timestamp, newText) {
+    const email = Session.getActiveUser().getEmail();
+    const role = getUserRole(email);
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const actionSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    
+    const actionData = actionSheet.getDataRange().getValues();
+    const projectData = projectSheet.getDataRange().getValues();
+    const usersData = usersSheet.getDataRange().getValues();
+
+    // Find the action
+    let actionRowIndex = -1;
+    let actionRow = null;
+    for (let i = 1; i < actionData.length; i++) {
+        if (actionData[i][0] === actionId) {
+            actionRow = actionData[i];
+            actionRowIndex = i;
+            break;
+        }
+    }
+
+    if (!actionRow) throw new Error("Action not found");
+
+    const actionOwner = actionRow[3];
+    const projectId = actionRow[1];
+
+    // Find linked project
+    let projectOwner = null;
+    for (let i = 1; i < projectData.length; i++) {
+        if (projectData[i][0] === projectId) {
+            projectOwner = projectData[i][2]; // Column C (index 2) is OwnerEmail
+            break;
+        }
+    }
+
+    // Get the updates log
+    let currentLog;
+    try {
+        currentLog = JSON.parse(actionData[actionRowIndex][8] || "[]");
+    } catch (e) {
+        currentLog = [];
+    }
+
+    // Find the log entry by timestamp
+    const logIndex = currentLog.findIndex(log => log.timestamp === timestamp);
+    if (logIndex === -1) {
+        throw new Error("Log entry not found.");
+    }
+
+    const logEntry = currentLog[logIndex];
+
+    // Authorization: Admin, action owner, project owner, or log author
+    const canEdit = (
+        role === "Admin" ||
+        logEntry.user === email ||
+        actionOwner === email ||
+        projectOwner === email
+    );
+
+    if (!canEdit) {
+        throw new Error("You don't have permission to edit this action log.");
+    }
+
+    // Update the log entry text and add edited indicator
+    currentLog[logIndex].text = newText + " (edited)";
+
+    // Write back to sheet
+    actionSheet.getRange(actionRowIndex + 1, 9).setValue(JSON.stringify(currentLog));
+
+    // Update last modified timestamp
+    const updateTimestamp = new Date().toISOString();
+    actionSheet.getRange(actionRowIndex + 1, 8).setValue(updateTimestamp);
+
+    return "Action log updated successfully!";
+}
+
 function addProjectComment(projectId, commentText) {
     const email = Session.getActiveUser().getEmail();
 
@@ -678,6 +757,8 @@ function addProjectComment(projectId, commentText) {
 
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === projectId) {
+            const projectName = data[i][1]; // Column B (index 1) = Name
+            const projectOwner = data[i][2]; // Column C (index 2) = OwnerEmail
 
             const timestamp = new Date().toISOString();
             // FIXED: Column 14 (1-based) = index [13] (0-based) = LastUpdated
@@ -700,7 +781,64 @@ function addProjectComment(projectId, commentText) {
 
             // FIXED: Write to Column 15
             sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentLog));
+            
+            // Send notification email if the note author is not the project owner
+            if (email !== projectOwner) {
+                try {
+                    sendProjectNoteNotification(projectId, projectName, projectOwner, email, commentText);
+                } catch (emailError) {
+                    // Log but don't block the comment from being added
+                    Logger.log('Failed to send notification email: ' + emailError.message);
+                }
+            }
+            
             return "Comment added to project!";
+        }
+    }
+    throw new Error("Project ID not found.");
+}
+
+function editProjectComment(projectId, timestamp, newText) {
+    const email = Session.getActiveUser().getEmail();
+    const role = getUserRole(email);
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const data = sheet.getDataRange().getValues();
+
+    for (let i = 1; i < data.length; i++) {
+        if (data[i][0] === projectId) {
+            let currentLog;
+            try {
+                currentLog = JSON.parse(data[i][14] || "[]");
+            } catch (e) {
+                currentLog = [];
+            }
+
+            // Find the note by timestamp
+            const noteIndex = currentLog.findIndex(note => note.timestamp === timestamp);
+            if (noteIndex === -1) {
+                throw new Error("Note not found.");
+            }
+
+            const note = currentLog[noteIndex];
+
+            // Authorization: Admin or note author only
+            if (role !== "Admin" && note.user !== email) {
+                throw new Error("You don't have permission to edit this note.");
+            }
+
+            // Update the note text and add edited indicator
+            currentLog[noteIndex].text = newText + " (edited)";
+            
+            // Update the sheet
+            sheet.getRange(i + 1, 15).setValue(JSON.stringify(currentLog));
+            
+            // Update last modified timestamp
+            const updateTimestamp = new Date().toISOString();
+            sheet.getRange(i + 1, 14).setValue(updateTimestamp);
+
+            return "Note updated successfully!";
         }
     }
     throw new Error("Project ID not found.");
@@ -738,6 +876,84 @@ function sendTaskAssignmentEmail(action) {
         Logger.log('sendTaskAssignmentEmail: attempting to send to: %s', action.owner);
         Logger.log('sendTaskAssignmentEmail: error: %s', e && e.toString ? e.toString() : JSON.stringify(e));
         throw new Error('Failed to send assignment email to ' + action.owner + ': ' + (e && e.message ? e.message : JSON.stringify(e)));
+    }
+}
+
+function sendProjectNoteNotification(projectId, projectName, projectOwner, noteAuthor, noteText) {
+    // Validate inputs
+    if (!projectOwner || !noteAuthor) {
+        Logger.log('sendProjectNoteNotification called with invalid parameters');
+        return;
+    }
+
+    // Get the web app URL (you may need to customize this)
+    const scriptUrl = ScriptApp.getService().getUrl();
+
+    const subject = `New Note Added to Your Project: ${projectName}`;
+    
+    // Create HTML body for better formatting
+    const htmlBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #0066cc;">New Note Added to Your Project</h2>
+      
+      <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <p><strong>Project:</strong> ${projectName}</p>
+        <p><strong>Project ID:</strong> ${projectId}</p>
+        <p><strong>Note By:</strong> ${noteAuthor}</p>
+        <p><strong>Time:</strong> ${new Date().toLocaleString()}</p>
+      </div>
+      
+      <div style="background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0;">
+        <strong>Note:</strong>
+        <p style="margin-top: 10px;">${noteText}</p>
+      </div>
+      
+      <p style="color: #666; font-size: 14px; margin-top: 30px;">
+        Please log in to the Project Management Hub to view all project details and respond if needed.
+      </p>
+      
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      
+      <p style="color: #999; font-size: 12px;">
+        This is an automated notification from the Project Management Hub. 
+        Please do not reply to this email.
+      </p>
+    </div>
+    `;
+
+    // Plain text fallback
+    const plainBody = `
+    New Note Added to Your Project: ${projectName}
+    
+    Project: ${projectName}
+    Project ID: ${projectId}
+    Note By: ${noteAuthor}
+    Time: ${new Date().toLocaleString()}
+    
+    Note:
+    ${noteText}
+    
+    Please log in to the Project Management Hub to view all project details and respond if needed.
+    
+    ---
+    This is an automated notification from the Project Management Hub.
+    Please do not reply to this email.
+    `;
+
+    try {
+        MailApp.sendEmail({
+            to: projectOwner,
+            subject: subject,
+            body: plainBody,
+            htmlBody: htmlBody,
+            name: 'Project Management Hub',
+            replyTo: 'no-reply@example.com'
+        });
+        Logger.log(`Successfully sent note notification to ${projectOwner} for project ${projectId}`);
+    } catch (e) {
+        Logger.log('sendProjectNoteNotification: attempting to send to: ' + projectOwner);
+        Logger.log('sendProjectNoteNotification: error: ' + (e && e.toString ? e.toString() : JSON.stringify(e)));
+        // Don't throw - we don't want email failures to block the note from being saved
     }
 }
 

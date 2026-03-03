@@ -498,9 +498,7 @@
                         </td>
                         <td><small>${escapeHtml(p.owner.substring(0, 25))}</small><br><small class="text-muted">${escapeHtml(p.manager || '')}</small></td>
                         <td>
-                            <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')" title="View Details">View</button>
-                            <button class="btn btn-sm btn-outline-warning" onclick="openEditProjectModal('${escapeHtml(p.id)}')" title="Edit Project">Edit</button>
-                            <button class="btn btn-sm btn-outline-info" onclick="openProjectNotesModal('${escapeHtml(p.id)}')" title="View/Add Notes">📝 Notes</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')" title="View Project Details">📋 View Details</button>
                         </td>
                     </tr>
                 `;
@@ -704,7 +702,58 @@
             }
         }
 
+        // Show Edit Project button for owner, manager, or admin
+        const editBtn = document.getElementById("btnEditProject");
+        if (editBtn) {
+            const canEdit = appState.role === "Admin" || 
+                          project.owner === appState.email || 
+                          project.manager === appState.email;
+            editBtn.style.display = canEdit ? "inline-block" : "none";
+        }
+
+        // Show Assign Action button for owner, manager, or admin
+        const assignBtn = document.getElementById("btnAssignAction");
+        if (assignBtn) {
+            const canAssign = appState.role === "Admin" || 
+                            project.owner === appState.email || 
+                            project.manager === appState.email;
+            assignBtn.style.display = canAssign ? "inline-block" : "none";
+        }
+
         modal.show();
+    }
+
+    function openEditProjectModalFromDetail() {
+        if (!appState.currentProjectId) {
+            showAlert("No project selected", "warning");
+            return;
+        }
+        // Close detail modal first
+        const detailModal = bootstrap.Modal.getInstance(document.getElementById('projectDetailModal'));
+        if (detailModal) detailModal.hide();
+        
+        // Open edit modal
+        openEditProjectModal(appState.currentProjectId);
+    }
+
+    function openAssignActionModalFromDetail() {
+        if (!appState.currentProjectId) {
+            showAlert("No project selected", "warning");
+            return;
+        }
+        // Close detail modal first
+        const detailModal = bootstrap.Modal.getInstance(document.getElementById('projectDetailModal'));
+        if (detailModal) detailModal.hide();
+        
+        // Pre-select the project in the assign action modal
+        const projectSelect = document.getElementById('aProjectSelect');
+        if (projectSelect) {
+            projectSelect.value = appState.currentProjectId;
+            updateAssignedTo(); // Update the assigned-to field
+        }
+        
+        // Open assign action modal
+        new bootstrap.Modal(document.getElementById('assignActionModal')).show();
     }
 
 
@@ -724,8 +773,10 @@
                         Loading...
                     </div>
                     <div class="modal-footer">
+                        <button type="button" class="btn btn-sm btn-warning text-dark" id="btnEditProject" onclick="openEditProjectModalFromDetail()" style="display:none;">✏️ Edit Project</button>
                         <button type="button" class="btn btn-sm btn-info text-white" id="btnAddNote" onclick="openAddNoteModal()">📝 Add Note</button>
-                        <button type="button" class="btn btn-sm btn-warning text-dark" id="btnViewHistory" onclick="openProjectHistoryModal()">📋 History</button>
+                        <button type="button" class="btn btn-sm btn-secondary" id="btnViewHistory" onclick="openProjectHistoryModal()">📋 View Notes</button>
+                        <button type="button" class="btn btn-sm btn-success text-white" id="btnAssignAction" onclick="openAssignActionModalFromDetail()" style="display:none;">🎯 Assign Action</button>
                         <button type="button" class="btn btn-sm btn-danger d-none" id="btnDeleteProject" onclick="confirmDeleteProject()">🗑️ Delete</button>
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                     </div>
@@ -751,6 +802,12 @@
         html += "<ul class='list-group list-group-flush small'>";
         projActions.forEach(a => {
             const badgeStyle = getStatusBadge(a.status);
+            const actionData = {
+                actionId: a.id,
+                actionOwner: a.owner,
+                projectOwner: proj.owner || '',
+                updates: a.updates
+            };
             html += `
           <li class="list-group-item px-0 py-2 d-flex justify-content-between align-items-center">
              <div>
@@ -759,7 +816,7 @@
              </div>
                  <div class="action-controls d-flex gap-1">
                      <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})">Update</button>
-                     <button class="btn btn-sm btn-light border" onclick='openHistoryModal(${JSON.stringify(a.updates)})'>Logs</button>
+                     <button class="btn btn-sm btn-light border" onclick='openActionHistoryModal(${JSON.stringify(actionData)})'>Logs</button>
                      ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteAction('${escapeHtml(a.id)}')">Delete</button>` : ''}
                  </div>
           </li>
@@ -1147,6 +1204,129 @@
         new bootstrap.Modal(document.getElementById('historyModal')).show();
     }
 
+    function openActionHistoryModal(actionData) {
+        const { actionId, actionOwner, projectOwner, updates } = actionData;
+        const container = document.getElementById("historyTimeline");
+        container.innerHTML = "";
+
+        const historyArray = updates || [];
+        if (historyArray.length === 0) {
+            container.innerHTML = "<div class='text-muted text-center py-4'>No update history available.</div>";
+        } else {
+            // Reverse to show newest at the top
+            [...historyArray].reverse().forEach(log => {
+                const date = new Date(log.timestamp).toLocaleString();
+                const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
+                
+                // Check if user can edit: Admin, action owner, project owner, or the log author
+                const canEdit = appState.role === 'Admin' || 
+                              log.user === appState.email || 
+                              actionOwner === appState.email || 
+                              projectOwner === appState.email;
+
+                container.innerHTML += `
+                  <div class="card mb-3 shadow-sm border-start border-success border-4 rounded-0">
+                    <div class="card-body py-2">
+                       <div class="d-flex justify-content-between align-items-center mb-1">
+                          <small class="fw-bold text-dark">${log.user}</small>
+                          <div>
+                            <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit log" onclick="openEditActionLogModal('${actionId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
+                          </div>
+                       </div>
+                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                    </div>
+                  </div>
+                `;
+            });
+        }
+
+        // Update modal title
+        const modal = document.getElementById('historyModal');
+        const title = modal.querySelector('.modal-title');
+        if (title) title.textContent = 'Action Update History';
+
+        new bootstrap.Modal(modal).show();
+    }
+
+    function openEditActionLogModal(actionId, logTimestamp, currentText) {
+        // Store data in a temporary global for the submit handler
+        window.editActionLogData = { actionId, logTimestamp };
+        
+        // Create or get the edit action log modal
+        let editModal = document.getElementById('editActionLogModal');
+        if (!editModal) {
+            editModal = document.createElement('div');
+            editModal.id = 'editActionLogModal';
+            editModal.className = 'modal fade';
+            editModal.innerHTML = `
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-warning">
+                            <h5 class="modal-title">✏️ Edit Action Log</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <form id="editActionLogForm" onsubmit="handleEditActionLogSubmit(event)">
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <label for="editActionLogText" class="form-label">Log Text</label>
+                                    <textarea class="form-control" id="editActionLogText" rows="4" required></textarea>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-warning">Save Changes</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(editModal);
+        }
+        
+        // Pre-fill the textarea
+        document.getElementById('editActionLogText').value = currentText;
+        
+        // Show the modal
+        new bootstrap.Modal(editModal).show();
+    }
+
+    function handleEditActionLogSubmit(e) {
+        e.preventDefault();
+        
+        const { actionId, logTimestamp } = window.editActionLogData;
+        const newText = document.getElementById('editActionLogText').value.trim();
+        
+        if (!newText) {
+            showAlert('Log text cannot be empty', 'warning');
+            return;
+        }
+        
+        // Close the edit modal
+        const editModal = bootstrap.Modal.getInstance(document.getElementById('editActionLogModal'));
+        if (editModal) editModal.hide();
+        
+        // Show loading
+        showAlert('Updating action log...', 'info');
+        
+        // Call backend
+        google.script.run
+            .withSuccessHandler(function(result) {
+                showAlert(result || 'Action log updated successfully!', 'success');
+                // Reload dashboard to get updated data
+                loadDashboard(function() {
+                    // Refresh the project detail view if it's still open
+                    if (appState.currentProjectId) {
+                        expandProjectDetail(appState.currentProjectId);
+                    }
+                });
+            })
+            .withFailureHandler(function(error) {
+                showAlert('Error updating action log: ' + error.message, 'danger');
+            })
+            .editActionUpdate(actionId, logTimestamp, newText);
+    }
+
     function openAddNoteModal() {
         if (!appState.currentProjectId) {
             showAlert("No project selected", "warning");
@@ -1191,13 +1371,19 @@
             [...historyArray].reverse().forEach(log => {
                 const date = new Date(log.timestamp).toLocaleString();
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
+                const canEdit = appState.role === 'Admin' || log.user === appState.email;
+                const canDelete = appState.role === 'Admin';
+                
                 container.innerHTML += `
                   <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
                     <div class="card-body py-2">
                        <div class="d-flex justify-content-between align-items-center mb-1">
                           <small class="fw-bold text-dark">${log.user}</small>
-                          <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
-                          ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                          <div>
+                            <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit note" onclick="openEditNoteModal('${projectId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
+                            ${canDelete ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                          </div>
                        </div>
                        <p class="mb-0 small">${log.text} ${statusBadge}</p>
                     </div>
@@ -1214,6 +1400,85 @@
         new bootstrap.Modal(modal).show();
     }
 
+    function openEditNoteModal(projectId, noteTimestamp, currentText) {
+        // Store data in a temporary global for the submit handler
+        window.editNoteData = { projectId, noteTimestamp };
+        
+        // Create or get the edit note modal
+        let editModal = document.getElementById('editNoteModal');
+        if (!editModal) {
+            editModal = document.createElement('div');
+            editModal.id = 'editNoteModal';
+            editModal.className = 'modal fade';
+            editModal.innerHTML = `
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header bg-warning">
+                            <h5 class="modal-title">✏️ Edit Note</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <form id="editNoteForm" onsubmit="handleEditNoteSubmit(event)">
+                            <div class="modal-body">
+                                <div class="mb-3">
+                                    <label for="editNoteText" class="form-label">Note Text</label>
+                                    <textarea class="form-control" id="editNoteText" rows="4" required></textarea>
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                <button type="submit" class="btn btn-warning">Save Changes</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(editModal);
+        }
+        
+        // Pre-fill the textarea
+        document.getElementById('editNoteText').value = currentText;
+        
+        // Show the modal
+        new bootstrap.Modal(editModal).show();
+    }
+
+    function handleEditNoteSubmit(e) {
+        e.preventDefault();
+        
+        const { projectId, noteTimestamp } = window.editNoteData;
+        const newText = document.getElementById('editNoteText').value.trim();
+        
+        if (!newText) {
+            showAlert('Note text cannot be empty', 'warning');
+            return;
+        }
+        
+        // Close the edit modal
+        const editModal = bootstrap.Modal.getInstance(document.getElementById('editNoteModal'));
+        if (editModal) editModal.hide();
+        
+        // Show loading
+        showAlert('Updating note...', 'info');
+        
+        // Call backend
+        google.script.run
+            .withSuccessHandler(function(result) {
+                showAlert(result || 'Note updated successfully!', 'success');
+                // Reload dashboard to get updated data
+                loadDashboard(function() {
+                    // Refresh the notes modal if it's still open
+                    const historyModal = document.getElementById('historyModal');
+                    if (historyModal && historyModal.classList.contains('show')) {
+                        openProjectNotesModal(projectId);
+                    }
+                });
+            })
+            .withFailureHandler(function(error) {
+                showAlert('Error updating note: ' + error.message, 'danger');
+            })
+            .editProjectComment(projectId, noteTimestamp, newText);
+    }
+
     // rebuild the history/notes panel when the modal is already visible
     function refreshHistoryContent(projectId) {
         const project = appState.projects.find(p => p.id === projectId);
@@ -1228,13 +1493,19 @@
             [...historyArray].reverse().forEach(log => {
                 const date = new Date(log.timestamp).toLocaleString();
                 const statusBadge = log.status ? `<span class="badge bg-secondary ms-1">${log.status}</span>` : "";
+                const canEdit = appState.role === 'Admin' || log.user === appState.email;
+                const canDelete = appState.role === 'Admin';
+                
                 container.innerHTML += `
                   <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
                     <div class="card-body py-2">
                        <div class="d-flex justify-content-between align-items-center mb-1">
                           <small class="fw-bold text-dark">${log.user}</small>
-                          <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
-                          ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                          <div>
+                            <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit note" onclick="openEditNoteModal('${projectId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
+                            ${canDelete ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                          </div>
                        </div>
                        <p class="mb-0 small">${log.text} ${statusBadge}</p>
                     </div>
