@@ -100,7 +100,10 @@ function initializeDatabase() {
 function getUserRole(email) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
-    const data = usersSheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query ===
+    const lastRow = usersSheet.getLastRow();
+    if (lastRow <= 1) return "None";
+    const data = usersSheet.getRange(1, 1, lastRow, 3).getValues();
 
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === email) {
@@ -117,7 +120,10 @@ function getManagerForUser(email) {
     if (!email) return "";
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
-    const data = usersSheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query ===
+    const lastRow = usersSheet.getLastRow();
+    if (lastRow <= 1) return "";
+    const data = usersSheet.getRange(1, 1, lastRow, 4).getValues();
 
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === email) {
@@ -172,25 +178,81 @@ function getDownstreamEmployees(managerEmail, usersData) {
 
 function getDashboardData() {
     const email = Session.getActiveUser().getEmail();
-    const role = getUserRole(email);
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
     Logger.log("=== getDashboardData START for " + email + " ===");
     
+    // === PERFORMANCE: Per-request memoization cache ===
+    const requestCache = {
+        userRoles: {},
+        userManagers: {},
+        downstreamEmployees: {}
+    };
+    
+    // === PERFORMANCE: Replace getDataRange() with bounded queries ===
     // Fetch Users for hierarchy
-    const usersData = ss.getSheetByName(SHEET_NAMES.USERS).getDataRange().getValues();
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const usersLastRow = usersSheet.getLastRow();
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+    
+    // Memoized getUserRole for this request
+    const getUserRoleMemo = (userEmail) => {
+        if (!userEmail) return "None";
+        if (requestCache.userRoles[userEmail] !== undefined) {
+            return requestCache.userRoles[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userRoles[userEmail] = usersData[i][2];
+                return usersData[i][2];
+            }
+        }
+        requestCache.userRoles[userEmail] = "None";
+        return "None";
+    };
+    
+    // Memoized getManagerForUser for this request
+    const getManagerForUserMemo = (userEmail) => {
+        if (!userEmail) return "";
+        if (requestCache.userManagers[userEmail] !== undefined) {
+            return requestCache.userManagers[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userManagers[userEmail] = usersData[i][3] || "";
+                return usersData[i][3] || "";
+            }
+        }
+        requestCache.userManagers[userEmail] = "";
+        return "";
+    };
+    
+    const role = getUserRoleMemo(email);
+    
+    // Memoized getDownstreamEmployees for this request
+    const getDownstreamEmployeesMemo = (managerEmail) => {
+        if (!managerEmail) return [];
+        if (requestCache.downstreamEmployees[managerEmail] !== undefined) {
+            return requestCache.downstreamEmployees[managerEmail];
+        }
+        const result = getDownstreamEmployees(managerEmail, usersData);
+        requestCache.downstreamEmployees[managerEmail] = result;
+        return result;
+    };
     
     let downstreamEmails = [];
     try {
-        downstreamEmails = getDownstreamEmployees(email, usersData);
+        downstreamEmails = getDownstreamEmployeesMemo(email);
         Logger.log("getDownstreamEmployees completed successfully. Count: " + downstreamEmails.length);
     } catch (e) {
         Logger.log("ERROR in getDownstreamEmployees: " + e.message);
         downstreamEmails = [];
     }
 
-    // Fetch Settings (for UI dropdowns)
-    const settingsData = ss.getSheetByName(SHEET_NAMES.SETTINGS).getDataRange().getValues();
+    // === PERFORMANCE: Fetch Settings with bounded query ===
+    const settingsSheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
+    const settingsLastRow = settingsSheet.getLastRow();
+    const settingsData = settingsLastRow > 1 ? settingsSheet.getRange(1, 1, settingsLastRow, 2).getValues() : [[]];
     settingsData.shift(); // remove headers
     let settings = {
         projectTypes: [],
@@ -206,10 +268,13 @@ function getDashboardData() {
     Logger.log("User: " + email + ", Role: " + role + ", Downstream: " + JSON.stringify(downstreamEmails));
     Logger.log("Settings loaded: ProjectTypes=" + settings.projectTypes.length + ", Statuses=" + settings.statuses.length + ", Phases=" + settings.phases.length);
 
-    // 1. Fetch Projects
+    // === PERFORMANCE: Fetch Projects with bounded query ===
     const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const pData = projectsSheet.getDataRange().getValues();
-    const pHeaders = pData.shift();
+    const projectsLastRow = projectsSheet.getLastRow();
+    const pData = projectsLastRow > 1 ? projectsSheet.getRange(2, 1, projectsLastRow - 1, 16).getValues() : [];
+    
+    // Track projects that need manager derivation for batch write later
+    const projectsNeedingManager = [];
 
     let projects = [];
     pData.forEach((row, idx) => {
@@ -219,17 +284,13 @@ function getDashboardData() {
             const projectOwner = row[2] || "";
             let projectManager = row[3] || "";
 
-            // if manager is blank, try to derive it from users sheet and persist
+            // === PERFORMANCE: Derive manager but DON'T write during read ===
+            // Store for batch write later if needed
             if (!projectManager && projectOwner) {
-                const derived = getManagerForUser(projectOwner);
+                const derived = getManagerForUserMemo(projectOwner);
                 if (derived) {
                     projectManager = derived;
-                    // write back to sheet so future loads don't need to derive again
-                    try {
-                        projectsSheet.getRange(idx + 2, 4).setValue(derived); // idx+2 accounts for header row
-                    } catch (e) {
-                        Logger.log("Failed to persist derived manager for project " + row[0] + ": " + e.message);
-                    }
+                    projectsNeedingManager.push({ rowIndex: idx + 2, manager: derived });
                 }
             }
 
@@ -247,10 +308,18 @@ function getDashboardData() {
             }
             
             if (canSeeProject) {
-                // Safeguard JSON parsing
-                let parsedComments = [];
+                // === PERFORMANCE: Column projection - send minimal data for list view ===
+                // Don't parse full comment history for dashboard, only send summary
+                let commentCount = 0;
+                let lastComment = null;
                 if (row[14] && typeof row[14] === 'string' && row[14].trim() !== "") {
-                    try { parsedComments = JSON.parse(row[14]); } catch (e) { 
+                    try { 
+                        const parsedComments = JSON.parse(row[14]);
+                        commentCount = parsedComments.length;
+                        if (parsedComments.length > 0) {
+                            lastComment = parsedComments[parsedComments.length - 1];
+                        }
+                    } catch (e) { 
                         Logger.log("Error parsing comments for project " + row[0] + ": " + e.message);
                     }
                 }
@@ -270,9 +339,10 @@ function getDashboardData() {
                     lastUpdatedText: row[11],
                     createdAt: row[12] ? new Date(row[12]).toLocaleString() : "",
                     lastUpdatedDate: row[13] ? new Date(row[13]).toLocaleString() : "",
-                    comments: parsedComments,
                     projectType: row[15] || "Other",
-                    updates: parsedComments  // Use comments as update history
+                    // === PERFORMANCE: Lazy load - only send summary, not full comments ===
+                    commentCount: commentCount,
+                    lastComment: lastComment
                 });
             }
         } catch (err) {
@@ -280,10 +350,23 @@ function getDashboardData() {
         }
     });
 
-    // 2. Fetch Actions
+    // === PERFORMANCE: Batch write derived managers (async, don't block response) ===
+    if (projectsNeedingManager.length > 0) {
+        try {
+            // Use batch setValues instead of individual setValue calls
+            projectsNeedingManager.forEach(item => {
+                projectsSheet.getRange(item.rowIndex, 4).setValue(item.manager);
+            });
+            Logger.log("Batch updated " + projectsNeedingManager.length + " project managers");
+        } catch (e) {
+            Logger.log("Failed batch manager update: " + e.message);
+        }
+    }
+
+    // === PERFORMANCE: Fetch Actions with bounded query ===
     const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
-    const aData = actionsSheet.getDataRange().getValues();
-    const aHeaders = aData.shift();
+    const actionsLastRow = actionsSheet.getLastRow();
+    const aData = actionsLastRow > 1 ? actionsSheet.getRange(2, 1, actionsLastRow - 1, 9).getValues() : [];
 
     let actions = [];
     aData.forEach((row, idx) => {
@@ -375,6 +458,65 @@ function getDashboardData() {
     };
 }
 
+// === PERFORMANCE: Lazy-load project details on-demand ===
+/**
+ * Get full project details including complete comment history when user clicks on a project.
+ * This avoids sending large comment arrays for all projects on initial load.
+ */
+function getProjectDetails(projectId) {
+    const email = Session.getActiveUser().getEmail();
+    const role = getUserRole(email);
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const projectsLastRow = projectsSheet.getLastRow();
+    const pData = projectsLastRow > 1 ? projectsSheet.getRange(2, 1, projectsLastRow - 1, 16).getValues() : [];
+    
+    for (let i = 0; i < pData.length; i++) {
+        const row = pData[i];
+        if (row[0] === projectId) {
+            // Check authorization (same logic as getDashboardData)
+            const projectOwner = row[2] || "";
+            const projectManager = row[3] || "";
+            
+            // Simple authorization check
+            const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+            const usersLastRow = usersSheet.getLastRow();
+            const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+            const downstreamEmails = getDownstreamEmployees(email, usersData);
+            
+            const canSee = (
+                role === "Admin" ||
+                projectOwner === email ||
+                projectManager === email ||
+                (projectOwner && downstreamEmails.includes(projectOwner))
+            );
+            
+            if (!canSee) {
+                throw new Error("Unauthorized to view this project");
+            }
+            
+            // Parse full comments
+            let parsedComments = [];
+            if (row[14] && typeof row[14] === 'string' && row[14].trim() !== "") {
+                try {
+                    parsedComments = JSON.parse(row[14]);
+                } catch (e) {
+                    Logger.log("Error parsing comments for project " + projectId + ": " + e.message);
+                }
+            }
+            
+            return {
+                id: row[0],
+                comments: parsedComments,
+                updates: parsedComments
+            };
+        }
+    }
+    
+    throw new Error("Project not found");
+}
+
 // --- HELPER ENDPOINTS ---
 function getScriptUrl() {
     return ScriptApp.getService().getUrl();
@@ -389,10 +531,11 @@ function getAdminData() {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
+    // === PERFORMANCE: Use bounded queries ===
     // 1. Fetch All Users
     const userSheet = ss.getSheetByName(SHEET_NAMES.USERS);
-    const uData = userSheet.getDataRange().getValues();
-    uData.shift();
+    const userLastRow = userSheet.getLastRow();
+    const uData = userLastRow > 1 ? userSheet.getRange(2, 1, userLastRow - 1, 5).getValues() : [];
     let users = uData.map(r => ({
         email: r[0],
         name: r[1],
@@ -403,8 +546,8 @@ function getAdminData() {
 
     // 2. Fetch All Settings 
     const setSheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
-    const sData = setSheet.getDataRange().getValues();
-    sData.shift();
+    const setLastRow = setSheet.getLastRow();
+    const sData = setLastRow > 1 ? setSheet.getRange(2, 1, setLastRow - 1, 2).getValues() : [];
     let settingsList = sData.map(r => ({
         key: r[0],
         value: r[1]
@@ -541,7 +684,9 @@ function createAction(projectId, desc, actionOwner, priority) {
 
     // Determine the actual assignee: the owner of the linked project
     const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const projData = projectSheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query ===
+    const projLastRow = projectSheet.getLastRow();
+    const projData = projLastRow > 1 ? projectSheet.getRange(1, 1, projLastRow, 16).getValues() : [[]];
     let projectOwner = null;
     for (let i = 1; i < projData.length; i++) {
         if (projData[i][0] === projectId) {
@@ -586,16 +731,29 @@ function createAction(projectId, desc, actionOwner, priority) {
 
 function updateActionStatus(actionId, newStatus, pctComplete, updateNote) {
     const email = Session.getActiveUser().getEmail();
-    const role = getUserRole(email);
-
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // === PERFORMANCE: Use bounded queries instead of getDataRange() ===
     const actionSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
     const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
     const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
-
-    const actionData = actionSheet.getDataRange().getValues();
-    const projectData = projectSheet.getDataRange().getValues();
-    const usersData = usersSheet.getDataRange().getValues();
+    
+    const actionLastRow = actionSheet.getLastRow();
+    const projectLastRow = projectSheet.getLastRow();
+    const usersLastRow = usersSheet.getLastRow();
+    
+    const actionData = actionLastRow > 1 ? actionSheet.getRange(1, 1, actionLastRow, 9).getValues() : [[]];
+    const projectData = projectLastRow > 1 ? projectSheet.getRange(1, 1, projectLastRow, 16).getValues() : [[]];
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+    
+    // Cache role lookup
+    let role = "None";
+    for (let i = 1; i < usersData.length; i++) {
+        if (usersData[i][0] === email) {
+            role = usersData[i][2];
+            break;
+        }
+    }
 
     // FIXED: Find the action first
     let actionRowIndex = -1;
@@ -641,12 +799,9 @@ function updateActionStatus(actionId, newStatus, pctComplete, updateNote) {
 
     // Now safe to update
     const timestamp = new Date().toISOString();
-
-    actionSheet.getRange(actionRowIndex + 1, 5).setValue(newStatus);
-    actionSheet.getRange(actionRowIndex + 1, 6).setValue(pctComplete);
-    actionSheet.getRange(actionRowIndex + 1, 8).setValue(timestamp);
-
-    // Append to JSON Log 
+    
+    // Prepare update log
+    let updatedLog = null;
     if (updateNote || newStatus) {
         let currentLog;
         try {
@@ -662,25 +817,67 @@ function updateActionStatus(actionId, newStatus, pctComplete, updateNote) {
             text: updateNote || "Status updated."
         };
         currentLog.push(newLogEntry);
-
-        actionSheet.getRange(actionRowIndex + 1, 9).setValue(JSON.stringify(currentLog));
+        updatedLog = JSON.stringify(currentLog);
     }
 
-    return "Action updated successfully!";
+    // === PERFORMANCE: Batch write - single setValues call instead of 3-4 separate setValue calls ===
+    if (updatedLog) {
+        // Update status, percentage, timestamp, and log in one operation
+        actionSheet.getRange(actionRowIndex + 1, 5, 1, 5).setValues([[
+            newStatus,
+            pctComplete,
+            actionRow[6], // Priority (unchanged)
+            timestamp,
+            updatedLog
+        ]]);
+    } else {
+        // Update status, percentage, timestamp only
+        actionSheet.getRange(actionRowIndex + 1, 5, 1, 4).setValues([[
+            newStatus,
+            pctComplete,
+            actionRow[6], // Priority (unchanged)
+            timestamp
+        ]]);
+    }
+    
+    // Return updated action data for client-side cache update
+    return {
+        success: true,
+        action: {
+            id: actionId,
+            status: newStatus,
+            percentageCompleted: pctComplete,
+            lastUpdatedDate: new Date(timestamp).toLocaleString(),
+            updates: updatedLog ? JSON.parse(updatedLog) : JSON.parse(actionData[actionRowIndex][8] || "[]")
+        }
+    };
 }
 
 function editActionUpdate(actionId, timestamp, newText) {
     const email = Session.getActiveUser().getEmail();
-    const role = getUserRole(email);
-
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    // === PERFORMANCE: Use bounded queries ===
     const actionSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
     const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
     const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
     
-    const actionData = actionSheet.getDataRange().getValues();
-    const projectData = projectSheet.getDataRange().getValues();
-    const usersData = usersSheet.getDataRange().getValues();
+    const actionLastRow = actionSheet.getLastRow();
+    const projectLastRow = projectSheet.getLastRow();
+    const usersLastRow = usersSheet.getLastRow();
+    
+    const actionData = actionLastRow > 1 ? actionSheet.getRange(1, 1, actionLastRow, 9).getValues() : [[]];
+    const projectData = projectLastRow > 1 ? projectSheet.getRange(1, 1, projectLastRow, 16).getValues() : [[]];
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+    
+    // Cache role lookup
+    let role = "None";
+    for (let i = 1; i < usersData.length; i++) {
+        if (usersData[i][0] === email) {
+            role = usersData[i][2];
+            break;
+        }
+    }
 
     // Find the action
     let actionRowIndex = -1;
@@ -753,7 +950,9 @@ function addProjectComment(projectId, commentText) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const data = sheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query ===
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
 
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === projectId) {

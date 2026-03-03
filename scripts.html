@@ -7,6 +7,82 @@
         return div.innerHTML;
     }
 
+    // === PERFORMANCE: Session cache with 30-second TTL for client-side caching ===
+    const SESSION_CACHE = {
+        data: null,
+        timestamp: null,
+        TTL_MS: 30000, // 30 seconds
+        
+        set: function(data) {
+            this.data = data;
+            this.timestamp = Date.now();
+            // Also persist to sessionStorage for page refreshes
+            try {
+                sessionStorage.setItem('dashboardCache', JSON.stringify({
+                    data: data,
+                    timestamp: this.timestamp
+                }));
+            } catch (e) {
+                console.warn('SessionStorage not available:', e);
+            }
+        },
+        
+        get: function() {
+            // Check memory cache first
+            if (this.data && this.timestamp && (Date.now() - this.timestamp < this.TTL_MS)) {
+                return this.data;
+            }
+            
+            // Try sessionStorage
+            try {
+                const cached = sessionStorage.getItem('dashboardCache');
+                if (cached) {
+                    const parsed = JSON.parse(cached);
+                    if (Date.now() - parsed.timestamp < this.TTL_MS) {
+                        this.data = parsed.data;
+                        this.timestamp = parsed.timestamp;
+                        return this.data;
+                    }
+                }
+            } catch (e) {
+                console.warn('Error reading cache:', e);
+            }
+            
+            return null;
+        },
+        
+        invalidate: function() {
+            this.data = null;
+            this.timestamp = null;
+            try {
+                sessionStorage.removeItem('dashboardCache');
+            } catch (e) {}
+        },
+        
+        // Update specific project or action without full reload
+        updateItem: function(type, id, updates) {
+            if (!this.data || !this.data[type]) return;
+            const index = this.data[type].findIndex(item => item.id === id);
+            if (index !== -1) {
+                this.data[type][index] = { ...this.data[type][index], ...updates };
+                this.set(this.data); // Re-save to storage
+            }
+        }
+    };
+    
+    // === PERFORMANCE: Debounce utility for filter operations ===
+    function debounce(func, wait) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
     // State
     let appState = {
         email: "",
@@ -135,8 +211,36 @@
 
     // --- API Calls ---
     // loadDashboard optionally accepts a callback that's executed after the state is updated
-    function loadDashboard(callback) {
+    function loadDashboard(callback, forceRefresh = false) {
         console.log("1. Starting loadDashboard()...");
+        
+        // === PERFORMANCE: Check cache first (unless force refresh) ===
+        if (!forceRefresh) {
+            const cached = SESSION_CACHE.get();
+            if (cached) {
+                console.log("2. Using cached data (age: " + (Date.now() - SESSION_CACHE.timestamp) + "ms)");
+                appState = {
+                    email: cached.email || "",
+                    role: cached.role || "",
+                    projects: cached.projects || [],
+                    actions: cached.actions || [],
+                    settings: cached.settings || { projectTypes: [], phases: [], statuses: [] },
+                    metrics: cached.metrics || {}
+                };
+                window.allUsers = cached.users || [];
+                
+                populateDropdowns();
+                renderHeader();
+                renderProjects();
+                applyRBAC();
+                
+                if (callback && typeof callback === 'function') {
+                    callback();
+                }
+                return; // Skip server call
+            }
+        }
+        
         setGlobalLoading(true, "Refreshing dashboard...");
         google.script.run
             .withSuccessHandler(data => {
@@ -147,6 +251,9 @@
                     setGlobalLoading(false);
                     return;
                 }
+                
+                // === PERFORMANCE: Cache the response ===
+                SESSION_CACHE.set(data);
                 
                 appState = {
                     email: data.email || "",
@@ -411,6 +518,13 @@
         document.getElementById("aAssigneeDropdownList").style.display = "none";
     }
 
+    // === PERFORMANCE: Pagination state ===
+    let paginationState = {
+        currentPage: 1,
+        itemsPerPage: 50, // Show 50 projects at a time
+        filteredProjects: []
+    };
+
     function renderProjects() {
         console.log(" -> renderProjects: Initialization.");
         const grid = document.getElementById("projectsGrid");
@@ -420,24 +534,68 @@
         select.innerHTML = '<option value="">Select Project...</option>';
 
         console.log(" -> renderProjects: Filtering appState projects.");
-        const filteredProjects = appState.projects.filter(passesFilters);
-        console.log(" -> renderProjects: " + filteredProjects.length + " projects passed the filter.");
+        paginationState.filteredProjects = appState.projects.filter(passesFilters);
+        paginationState.currentPage = 1; // Reset to first page
+        console.log(" -> renderProjects: " + paginationState.filteredProjects.length + " projects passed the filter.");
 
-        if (filteredProjects.length === 0) {
+        if (paginationState.filteredProjects.length === 0) {
             grid.innerHTML = "<div class='col-12 text-center text-muted py-5'>No matching projects.</div>";
             return;
         }
 
-        // Populate dropdown
-        filteredProjects.forEach(p => {
+        // Populate dropdown with all projects (for action assignment)
+        paginationState.filteredProjects.forEach(p => {
             select.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`;
         });
 
         // Refresh assigned-to display after populating projects
         updateAssignedTo();
 
-        // Always render grouped list view
-        renderProjectsList(filteredProjects, grid);
+        // === PERFORMANCE: Render only first page ===
+        renderProjectsPage();
+    }
+
+    function renderProjectsPage() {
+        const grid = document.getElementById("projectsGrid");
+        const { currentPage, itemsPerPage, filteredProjects } = paginationState;
+        
+        const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
+        const startIndex = (currentPage - 1) * itemsPerPage;
+        const endIndex = Math.min(startIndex + itemsPerPage, filteredProjects.length);
+        const pageProjects = filteredProjects.slice(startIndex, endIndex);
+        
+        console.log(`Rendering page ${currentPage} of ${totalPages} (${startIndex}-${endIndex} of ${filteredProjects.length})`);
+        
+        // Add pagination controls at top
+        let paginationHTML = '';
+        if (totalPages > 1) {
+            paginationHTML = `
+                <div class="col-12 mb-3">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <span class="text-muted">Showing ${startIndex + 1}-${endIndex} of ${filteredProjects.length} projects</span>
+                        </div>
+                        <div class="btn-group" role="group">
+                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(1)" ${currentPage === 1 ? 'disabled' : ''}>First</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}>Previous</button>
+                            <button class="btn btn-sm btn-outline-secondary" disabled>Page ${currentPage} of ${totalPages}</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}>Next</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="changePage(${totalPages})" ${currentPage === totalPages ? 'disabled' : ''}>Last</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        grid.innerHTML = paginationHTML;
+        renderProjectsList(pageProjects, grid);
+    }
+
+    function changePage(newPage) {
+        paginationState.currentPage = newPage;
+        renderProjectsPage();
+        // Scroll to top of results
+        document.getElementById('projectsGrid').scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     function renderProjectsList(projects, grid) {
@@ -448,7 +606,9 @@
             groups[p.status].push(p);
         });
 
-        let html = "";
+        // === PERFORMANCE: Use DocumentFragment instead of innerHTML ===
+        const fragment = document.createDocumentFragment();
+        
         // Use dynamic status list from settings, fall back to hardcoded if not available
         const statusOrder = (appState.settings && appState.settings.statuses) ? appState.settings.statuses : ["Not Started", "Pending", "In Progress", "On Hold", "Completed", "Cancelled", "Closure"];
         let groupCounter = 0;
@@ -459,32 +619,13 @@
             const statusColor = getStatusColor(status);
             const groupId = `group-${groupCounter++}`;
             
-            html += `
-                <div class="col-12 mb-3">
-                    <div class="card border-${statusColor} border-start border-5 shadow-sm">
-                        <div class="card-header bg-light border-0 p-3" role="button" data-bs-toggle="collapse" data-bs-target="#${groupId}" style="cursor: pointer;">
-                            <h6 class="mb-0 fw-bold text-${statusColor}">
-                                <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status}
-                            </h6>
-                        </div>
-                        <div class="collapse show" id="${groupId}">
-                            <div class="table-responsive">
-                                <table class="table table-hover mb-0">
-                                    <thead class="table-light">
-                                        <tr>
-                                            <th style="width: 30%;">Project</th>
-                                            <th style="width: 15%;">Phase</th>
-                                            <th style="width: 15%;">Progress</th>
-                                            <th style="width: 20%;">Owner / Manager</th>
-                                            <th style="width: 20%;">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-            `;
-
+            const groupDiv = document.createElement('div');
+            groupDiv.className = 'col-12 mb-3';
+            
+            let tableRows = '';
             groups[status].forEach(p => {
                 const progressWidth = Math.min(100, p.percentageCompleted || 0);
-                html += `
+                tableRows += `
                     <tr class="align-middle">
                         <td>
                             <div class="fw-bold">${escapeHtml(p.name)}</div>
@@ -503,18 +644,39 @@
                     </tr>
                 `;
             });
-
-            html += `
-                                    </tbody>
-                                </table>
-                            </div>
+            
+            groupDiv.innerHTML = `
+                <div class="card border-${statusColor} border-start border-5 shadow-sm">
+                    <div class="card-header bg-light border-0 p-3" role="button" data-bs-toggle="collapse" data-bs-target="#${groupId}" style="cursor: pointer;">
+                        <h6 class="mb-0 fw-bold text-${statusColor}">
+                            <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status}
+                        </h6>
+                    </div>
+                    <div class="collapse show" id="${groupId}">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 30%;">Project</th>
+                                        <th style="width: 15%;">Phase</th>
+                                        <th style="width: 15%;">Progress</th>
+                                        <th style="width: 20%;">Owner / Manager</th>
+                                        <th style="width: 20%;">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${tableRows}
+                                </tbody>
+                            </table>
                         </div>
                     </div>
                 </div>
             `;
+            
+            fragment.appendChild(groupDiv);
         });
 
-        grid.innerHTML = html;
+        grid.appendChild(fragment);
     }
 
     // Set the Assigned To display in the Action modal to the selected project's owner
@@ -658,7 +820,10 @@
             <div class="mb-3">
                 <h6 class="text-muted">Latest Update</h6>
                 <p class="small mb-1"><span class="text-muted">${escapeHtml(project.lastUpdatedDate)}</span></p>
-                <div class="alert alert-light border mb-0"><small>${escapeHtml(getLatestProjectUpdate(project) || "No updates yet.")}</small></div>
+                <div class="alert alert-light border mb-0">
+                    <small>${escapeHtml(project.lastComment ? project.lastComment.text : "No updates yet.")}</small>
+                </div>
+                ${project.commentCount > 0 ? `<button class="btn btn-sm btn-outline-secondary mt-2" onclick="viewProjectHistory('${escapeHtml(project.id)}')">View All ${project.commentCount} Updates</button>` : ''}
             </div>
 
             <hr>
@@ -836,6 +1001,14 @@
     }
 
     // --- Filter Handlers ---
+    // === PERFORMANCE: Cache parsed dates to avoid repeated parsing ===
+    let filterCache = {
+        dateFrom: null,
+        dateTo: null,
+        parsedDateFrom: null,
+        parsedDateTo: null
+    };
+    
     function passesFilters(item) {
         const statusFilter = document.getElementById("filterStatus").value;
         const phaseFilter = document.getElementById("filterPhase").value;
@@ -853,19 +1026,34 @@
         // 1c. Owner Filter (only applies if user selected one)
         if (ownerFilter && ownerFilter !== "All" && item.owner !== ownerFilter) return false;
 
-        // 2. Date Filter
+        // 2. Date Filter - === PERFORMANCE: Cache parsed dates ===
         if (dateFrom || dateTo) {
+            // Cache date parsing
+            if (filterCache.dateFrom !== dateFrom) {
+                filterCache.dateFrom = dateFrom;
+                filterCache.parsedDateFrom = dateFrom ? new Date(dateFrom).setHours(0, 0, 0, 0) : null;
+            }
+            if (filterCache.dateTo !== dateTo) {
+                filterCache.dateTo = dateTo;
+                filterCache.parsedDateTo = dateTo ? new Date(dateTo).setHours(23, 59, 59, 999) : null;
+            }
+            
             const itemDate = new Date(item.lastUpdatedDate).getTime();
-            if (dateFrom && itemDate < new Date(dateFrom).setHours(0, 0, 0, 0)) return false;
-            if (dateTo && itemDate > new Date(dateTo).setHours(23, 59, 59, 999)) return false;
+            if (filterCache.parsedDateFrom && itemDate < filterCache.parsedDateFrom) return false;
+            if (filterCache.parsedDateTo && itemDate > filterCache.parsedDateTo) return false;
         }
 
         return true;
     }
 
-    function applyFilters() {
+    // === PERFORMANCE: Debounced filter application (200ms delay) ===
+    const debouncedApplyFilters = debounce(() => {
         populateDropdowns();
         renderProjects();
+    }, 200);
+    
+    function applyFilters() {
+        debouncedApplyFilters();
     }
 
     function clearFilters() {
@@ -951,9 +1139,11 @@
                 btn.disabled = false;
                 btn.innerHTML = "Create Project";
 
-                // Soft data refresh to prevent iFrame cycle bug
+                // === PERFORMANCE: Invalidate cache and do lightweight refresh ===
                 showAlert("Project Created Successfully!", "success");
-                loadDashboard();
+                SESSION_CACHE.invalidate();
+                // Force refresh to get new project
+                loadDashboard(() => setGlobalLoading(false), true);
             })
             .withFailureHandler(err => {
                 showAlert(err.message, "danger");
@@ -1045,7 +1235,25 @@
                 btn.innerHTML = "Save Update";
 
                 showAlert("Action saved!", "success");
-                loadDashboard();
+                
+                // === PERFORMANCE: Differential update instead of full reload ===
+                if (res && res.success && res.action) {
+                    // Update action in appState
+                    const actionIndex = appState.actions.findIndex(a => a.id === actionId);
+                    if (actionIndex !== -1) {
+                        appState.actions[actionIndex] = { ...appState.actions[actionIndex], ...res.action };
+                    }
+                    
+                    // Update cache
+                    SESSION_CACHE.updateItem('actions', actionId, res.action);
+                    
+                    // Re-render only affected parts
+                    renderProjects();
+                    setGlobalLoading(false);
+                } else {
+                    // Fallback to full reload if server doesn't return differential data
+                    loadDashboard(() => setGlobalLoading(false));
+                }
             })
             .withFailureHandler(err => {
                 showAlert(err.message, "danger");
@@ -1057,6 +1265,51 @@
     }
 
     // --- Modal Handlers --- 
+    
+    // === PERFORMANCE: Lazy-load full project history on demand ===
+    function viewProjectHistory(projectId) {
+        setGlobalLoading(true, "Loading project history...");
+        
+        google.script.run
+            .withSuccessHandler(details => {
+                setGlobalLoading(false);
+                if (!details || !details.comments) {
+                    showAlert("No history available", "info");
+                    return;
+                }
+                
+                // Show history in modal
+                const historyModal = new bootstrap.Modal(document.getElementById("historyModal"));
+                const historyBody = document.getElementById("historyModalBody");
+                
+                if (details.comments.length === 0) {
+                    historyBody.innerHTML = '<p class="text-muted">No update history yet.</p>';
+                } else {
+                    let html = '<div class="list-group">';
+                    details.comments.forEach(c => {
+                        html += `
+                            <div class="list-group-item">
+                                <div class="d-flex w-100 justify-content-between">
+                                    <h6 class="mb-1">${escapeHtml(c.user || 'System')}</h6>
+                                    <small class="text-muted">${escapeHtml(c.timestamp || '')}</small>
+                                </div>
+                                <p class="mb-1">${escapeHtml(c.text || '')}</p>
+                            </div>
+                        `;
+                    });
+                    html += '</div>';
+                    historyBody.innerHTML = html;
+                }
+                
+                historyModal.show();
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error loading history: " + err.message, "danger");
+            })
+            .getProjectDetails(projectId);
+    }
+    
     function openCommentModal(projectId) {
         document.getElementById("cProjectId").value = projectId;
         document.getElementById("cText").value = "";
@@ -1144,7 +1397,9 @@
                 btn.innerHTML = "Save Changes";
 
                 showAlert("Project updated successfully!", "success");
-                loadDashboard();
+                // === PERFORMANCE: Invalidate cache and force refresh ===
+                SESSION_CACHE.invalidate();
+                loadDashboard(() => setGlobalLoading(false), true);
             })
             .withFailureHandler(err => {
                 showAlert("Error: " + err.message, "danger");
@@ -1178,7 +1433,24 @@
                 btn.innerHTML = "Add Comment";
 
                 showAlert("Comment added.", "success");
-                loadDashboard();
+                
+                // === PERFORMANCE: Differential update instead of full reload ===
+                // Update project in appState
+                const projectIndex = appState.projects.findIndex(p => p.id === pId);
+                if (projectIndex !== -1) {
+                    appState.projects[projectIndex].commentCount = (appState.projects[projectIndex].commentCount || 0) + 1;
+                    appState.projects[projectIndex].lastComment = {
+                        user: appState.email,
+                        timestamp: new Date().toISOString(),
+                        text: text
+                    };
+                    appState.projects[projectIndex].lastUpdatedDate = new Date().toLocaleString();
+                }
+                
+                // Invalidate cache to get fresh data on next reload
+                SESSION_CACHE.invalidate();
+                
+                setGlobalLoading(false);
             })
             .withFailureHandler(err => {
                 showAlert(err.message, "danger");
