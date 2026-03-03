@@ -1460,14 +1460,49 @@ function editProjectComment(projectId, timestamp, newText) {
 
 // --- NOTIFICATIONS ---
 function sendTaskAssignmentEmail(action) {
-    const subject = `New Task Assigned: [${action.id}]`;
-    const body = `
-    You have been assigned a new task.
-    Task ID: ${action.id}
-    Description: ${action.desc}
+    const subject = `New Task Assigned: ${action.desc}`;
+    
+    // HTML formatted body with consistent styling
+    const htmlBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #0066cc;">New Task Assigned to You</h2>
+      
+      <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <p><strong>Task:</strong> ${action.desc}</p>
+        <p><strong>Task ID:</strong> ${action.id}</p>
+        <p><strong>Status:</strong> ${action.status}</p>
+        <p><strong>Priority:</strong> ${action.priority}</p>
+        <p><strong>Assigned At:</strong> ${new Date().toLocaleString()}</p>
+      </div>
+      
+      <div style="background-color: #e7f3ff; border-left: 4px solid #0066cc; padding: 15px; margin: 20px 0;">
+        <p style="margin: 0;">Please log in to the <strong>Project Management Hub</strong> to view and update this task.</p>
+      </div>
+      
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      
+      <p style="color: #999; font-size: 12px;">
+        This is an automated notification from the Project Management Hub. 
+        Please do not reply to this email.
+      </p>
+    </div>
+    `;
 
-    Please log in to the Project Management Hub to view and update this task.
-  `;
+    // Plain text fallback
+    const plainBody = `
+New Task Assigned to You
+
+Task: ${action.desc}
+Task ID: ${action.id}
+Status: ${action.status}
+Priority: ${action.priority}
+
+Please log in to the Project Management Hub to view and update this task.
+
+---
+This is an automated notification from the Project Management Hub.
+Please do not reply to this email.
+    `;
 
     // make sure we have a valid recipient
     if (!action || !action.owner) {
@@ -1479,11 +1514,10 @@ function sendTaskAssignmentEmail(action) {
         MailApp.sendEmail({
             to: action.owner,
             subject: subject,
-            body: body,
-            // use the display name and a no‑reply address so the mailbox is readable
+            body: plainBody,
+            htmlBody: htmlBody,
             name: 'Project Management Hub',
             replyTo: 'no-reply@example.com'
-            // if you need a specific from-address that is an alias, add: from: 'alias@yourdomain.com'
         });
     } catch (e) {
         // Log full error and rethrow so caller / execution logs show the failure
@@ -1607,10 +1641,10 @@ function sendDailySummaryEmails() {
             if (isActive && (role === "Admin" || isRelated)) {
                 activeProjectsHTML += `
           <tr>
-            <td style="border: 1px solid #ddd; padding: 8px;"><b>${p.Name}</b></td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${p.Status} / ${p.Phase}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${p.PercentageCompleted}%</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${p.LastUpdatedText || "No updates"}</td>
+            <td style="border: 1px solid #ddd; padding: 10px;"><b>${p.Name}</b></td>
+            <td style="border: 1px solid #ddd; padding: 10px;">${p.Status} / ${p.Phase}</td>
+            <td style="border: 1px solid #ddd; padding: 10px;">${p.PercentageCompleted}%</td>
+            <td style="border: 1px solid #ddd; padding: 10px;">${p.LastUpdatedText || "No updates"}</td>
           </tr>
         `;
             }
@@ -1622,9 +1656,9 @@ function sendDailySummaryEmails() {
             if (r[3] === userEmail && r[4] !== "Completed") {
                 activeActionsHTML += `
           <tr>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r[2]}</td>
-            <td style="border: 1px solid #ddd; padding: 8px; color: ${r[6] === 'High' || r[6] === 'Critical' ? 'red' : 'black'}">${r[6]}</td>
-            <td style="border: 1px solid #ddd; padding: 8px;">${r[4]}</td>
+            <td style="border: 1px solid #ddd; padding: 10px;">${r[2]}</td>
+            <td style="border: 1px solid #ddd; padding: 10px; color: ${r[6] === 'High' || r[6] === 'Critical' ? 'red' : 'black'}; font-weight: ${r[6] === 'High' || r[6] === 'Critical' ? 'bold' : 'normal'};">${r[6]}</td>
+            <td style="border: 1px solid #ddd; padding: 10px;">${r[4]}</td>
           </tr>
         `;
             }
@@ -1634,35 +1668,41 @@ function sendDailySummaryEmails() {
         if (activeProjectsHTML === "" && activeActionsHTML === "") return; // Skip if nothing to report
 
         const emailHtml = `
-      <div style="font-family: Arial, sans-serif; color: #333;">
-        <h2 style="color: #0d6efd;">Daily Project Hub Summary</h2>
-        <p>Hello ${u[1]}, here is your end-of-day digest.</p>
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+        <h2 style="color: #0066cc; border-bottom: 2px solid #0066cc; padding-bottom: 10px;">Daily Project Hub Summary</h2>
+        
+        <p style="font-size: 14px; margin: 15px 0;">Hello ${u[1]}, here is your end-of-day digest.</p>
         
         ${activeActionsHTML ? `
-        <h3>Your Pending Actions</h3>
+        <h3 style="color: #1a1a1a; margin-top: 25px;">Your Pending Actions</h3>
         <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
           <tr style="background-color: #f8f9fa;">
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Task</th>
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Priority</th>
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Status</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">Task</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">Priority</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">Status</th>
           </tr>
           ${activeActionsHTML}
         </table>` : ""}
 
         ${activeProjectsHTML ? `
-        <h3>Active Projects Overview</h3>
-        <table style="border-collapse: collapse; width: 100%;">
+        <h3 style="color: #1a1a1a; margin-top: 25px;">Active Projects Overview</h3>
+        <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
           <tr style="background-color: #f8f9fa;">
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Project</th>
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Status / Phase</th>
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">% Complete</th>
-             <th style="border: 1px solid #ddd; padding: 8px; text-align: left;">Latest Note</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">Project</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">Status / Phase</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">% Complete</th>
+             <th style="border: 1px solid #ddd; padding: 10px; text-align: left; font-weight: bold;">Latest Note</th>
           </tr>
           ${activeProjectsHTML}
         </table>` : ""}
         
-        <br>
-        <p style="font-size: 12px; color: #777;">You are receiving this because your Email Notifications are enabled in the Project Hub Admin settings.</p>
+        <hr style="border: none; border-top: 1px solid #ddd; margin: 25px 0;">
+        
+        <p style="font-size: 12px; color: #999; margin-top: 20px;">
+          This is an automated digest from the Project Management Hub. You are receiving this because Email Notifications are enabled in the Admin settings.
+          <br>
+          Please do not reply to this email.
+        </p>
       </div>
     `;
 

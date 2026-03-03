@@ -689,14 +689,25 @@
             // Owner filter
             if (owner !== "All" && project.owner !== owner) return false;
             
-            // Date range filter
+            // Date range filter - compare by ISO date string only (YYYY-MM-DD)
             if (dateFrom || dateTo) {
-                const lastUpdated = project.lastUpdatedDate;
-                if (!lastUpdated) return false;
+                // Extract just the date part from lastUpdatedDate (works with localized strings)
+                let projectDateStr = "";
+                if (project.lastUpdatedDate) {
+                    try {
+                        const d = new Date(project.lastUpdatedDate);
+                        if (!isNaN(d.getTime())) {
+                            // Get ISO date string (YYYY-MM-DD)
+                            projectDateStr = d.toISOString().split('T')[0];
+                        }
+                    } catch (e) {
+                        // If can't parse, skip this project for date filter
+                    }
+                }
                 
-                const projectDate = new Date(lastUpdated);
-                if (dateFrom && projectDate < new Date(dateFrom)) return false;
-                if (dateTo && projectDate > new Date(dateTo)) return false;
+                if (!projectDateStr) return false;
+                if (dateFrom && projectDateStr < dateFrom) return false;
+                if (dateTo && projectDateStr > dateTo) return false;
             }
             
             return true;
