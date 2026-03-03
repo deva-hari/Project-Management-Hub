@@ -176,6 +176,222 @@ function getDownstreamEmployees(managerEmail, usersData) {
     return Array.from(downstream);
 }
 
+/**
+ * Get projects filtered by status for lazy-loading tabs
+ * @param {string} status - The status to filter by (e.g., "In Progress", "Completed")
+ * @returns {Object} - { projects: [], actions: [] }
+ */
+function getProjectsByStatus(status) {
+    const email = Session.getActiveUser().getEmail();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    Logger.log("=== getProjectsByStatus START for " + email + ", Status: " + status + " ===");
+    
+    // === Per-request memoization cache ===
+    const requestCache = {
+        userRoles: {},
+        userManagers: {},
+        downstreamEmployees: {}
+    };
+    
+    // Fetch Users for hierarchy
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const usersLastRow = usersSheet.getLastRow();
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+    
+    // Memoized getUserRole for this request
+    const getUserRoleMemo = (userEmail) => {
+        if (!userEmail) return "None";
+        if (requestCache.userRoles[userEmail] !== undefined) {
+            return requestCache.userRoles[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userRoles[userEmail] = usersData[i][2];
+                return usersData[i][2];
+            }
+        }
+        requestCache.userRoles[userEmail] = "None";
+        return "None";
+    };
+    
+    // Memoized getManagerForUser for this request
+    const getManagerForUserMemo = (userEmail) => {
+        if (!userEmail) return "";
+        if (requestCache.userManagers[userEmail] !== undefined) {
+            return requestCache.userManagers[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userManagers[userEmail] = usersData[i][3] || "";
+                return usersData[i][3] || "";
+            }
+        }
+        requestCache.userManagers[userEmail] = "";
+        return "";
+    };
+    
+    const role = getUserRoleMemo(email);
+    
+    // Memoized getDownstreamEmployees for this request
+    const getDownstreamEmployeesMemo = (managerEmail) => {
+        if (!managerEmail) return [];
+        if (requestCache.downstreamEmployees[managerEmail] !== undefined) {
+            return requestCache.downstreamEmployees[managerEmail];
+        }
+        const result = getDownstreamEmployees(managerEmail, usersData);
+        requestCache.downstreamEmployees[managerEmail] = result;
+        return result;
+    };
+    
+    let downstreamEmails = [];
+    try {
+        downstreamEmails = getDownstreamEmployeesMemo(email);
+    } catch (e) {
+        Logger.log("ERROR in getDownstreamEmployees: " + e.message);
+        downstreamEmails = [];
+    }
+
+    // Fetch Projects with bounded query
+    const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const projectsLastRow = projectsSheet.getLastRow();
+    const pData = projectsLastRow > 1 ? projectsSheet.getRange(2, 1, projectsLastRow - 1, 16).getValues() : [];
+
+    let projects = [];
+    pData.forEach((row, idx) => {
+        try {
+            if (!row[0]) return; // Skip empty rows
+            
+            // Filter by status - only return projects matching this specific status
+            const projectStatus = row[4] || "";
+            if (projectStatus !== status) {
+                return; // Skip projects that don't match status
+            }
+            
+            const projectOwner = row[2] || "";
+            let projectManager = row[3] || "";
+
+            // Derive manager if needed
+            if (!projectManager && projectOwner) {
+                const derived = getManagerForUserMemo(projectOwner);
+                if (derived) {
+                    projectManager = derived;
+                }
+            }
+
+            // Check visibility
+            let canSeeProject = false;
+            
+            if (role === "Admin") {
+                canSeeProject = true;
+            } else if (projectOwner === email) {
+                canSeeProject = true;
+            } else if (projectManager === email) {
+                canSeeProject = true;
+            } else if (projectOwner && downstreamEmails.includes(projectOwner)) {
+                canSeeProject = true;
+            }
+            
+            if (canSeeProject) {
+                // Column projection - send minimal data
+                let commentCount = 0;
+                let lastComment = null;
+                if (row[14] && typeof row[14] === 'string' && row[14].trim() !== "") {
+                    try { 
+                        const parsedComments = JSON.parse(row[14]);
+                        commentCount = parsedComments.length;
+                        if (parsedComments.length > 0) {
+                            lastComment = parsedComments[parsedComments.length - 1];
+                        }
+                    } catch (e) { 
+                        Logger.log("Error parsing comments for project " + row[0] + ": " + e.message);
+                    }
+                }
+
+                projects.push({
+                    id: row[0],
+                    name: row[1],
+                    owner: projectOwner,
+                    manager: projectManager,
+                    status: projectStatus,
+                    phase: row[5],
+                    percentageCompleted: row[6],
+                    startDate: row[7] ? new Date(row[7]).toLocaleDateString() : "",
+                    deadline: row[8] ? new Date(row[8]).toLocaleDateString() : "",
+                    outcomes: row[9],
+                    risks: row[10],
+                    lastUpdatedText: row[11],
+                    createdAt: row[12] ? new Date(row[12]).toLocaleString() : "",
+                    lastUpdatedDate: row[13] ? new Date(row[13]).toLocaleString() : "",
+                    projectType: row[15] || "Other",
+                    commentCount: commentCount,
+                    lastComment: lastComment
+                });
+            }
+        } catch (err) {
+            Logger.log("Error parsing project row " + idx + ": " + err.message);
+        }
+    });
+
+    // Fetch Actions for these projects
+    const projectIds = projects.map(p => p.id);
+    const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    const actionsLastRow = actionsSheet.getLastRow();
+    const aData = actionsLastRow > 1 ? actionsSheet.getRange(2, 1, actionsLastRow - 1, 9).getValues() : [];
+
+    let actions = [];
+    aData.forEach((row, idx) => {
+        try {
+            if (!row[0]) return; // Skip empty rows
+            
+            // Only include actions for projects in this status
+            if (!projectIds.includes(row[1])) {
+                return;
+            }
+
+            const actionOwner = row[3] || "";
+            let canSeeAction = false;
+
+            if (role === "Admin") {
+                canSeeAction = true;
+            } else if (actionOwner === email) {
+                canSeeAction = true;
+            } else if (actionOwner && downstreamEmails.includes(actionOwner)) {
+                canSeeAction = true;
+            } else {
+                // Can see if project is visible
+                const linkedProject = projects.find(p => p.id === row[1]);
+                if (linkedProject) {
+                    canSeeAction = true;
+                }
+            }
+
+            if (canSeeAction) {
+                actions.push({
+                    id: row[0],
+                    projectId: row[1],
+                    desc: row[2],
+                    owner: actionOwner,
+                    status: row[4],
+                    percentageCompleted: row[5],
+                    priority: row[6],
+                    lastUpdated: row[7] ? new Date(row[7]).toLocaleString() : "",
+                    updates: row[8] || ""
+                });
+            }
+        } catch (err) {
+            Logger.log("Error parsing action row " + idx + ": " + err.message);
+        }
+    });
+
+    Logger.log("getProjectsByStatus completed. Projects: " + projects.length + ", Actions: " + actions.length);
+
+    return {
+        projects: projects,
+        actions: actions
+    };
+}
+
 function getDashboardData() {
     const email = Session.getActiveUser().getEmail();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -419,22 +635,14 @@ function getDashboardData() {
         }
     });
 
-    // Calculate Manager Roll-Up Metrics
-    let totalProjects = projects.length;
-    let activeProjects = projects.filter(p => p.status !== "Completed" && p.status !== "Closure" && p.status !== "On Hold");
-    let avgCompletion = totalProjects > 0 ? Math.round(projects.reduce((acc, curr) => acc + (Number(curr.percentageCompleted) || 0), 0) / totalProjects) : 0;
-    let blockedTasks = actions.filter(a => a.status === "Blocked").length;
-
-    let statusCounts = {};
-    projects.forEach(p => {
-        statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
-    });
-
+    // === PERFORMANCE: Skip metrics calculation on initial load ===
+    // Metrics will be loaded on-demand when user expands the metrics section
     const metrics = {
-        totalActive: activeProjects.length,
-        averageCompletion: avgCompletion,
-        blockedActions: blockedTasks,
-        statusCounts: statusCounts
+        totalActive: 0,
+        averageCompletion: 0,
+        blockedActions: 0,
+        statusCounts: {},
+        loaded: false  // Flag to indicate metrics not yet loaded
     };
 
     Logger.log("Dashboard data ready: Projects=" + projects.length + ", Actions=" + actions.length);
@@ -456,6 +664,207 @@ function getDashboardData() {
         metrics: metrics,
         users: userList // Include users list for assignee dropdown
     };
+}
+
+/**
+ * Get dashboard metrics on-demand (called when user expands metrics section)
+ * This avoids calculating metrics on initial load for performance
+ */
+function getMetrics() {
+    const email = Session.getActiveUser().getEmail();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    Logger.log("=== getMetrics START for " + email + " ===");
+    
+    // Use same authorization logic as getDashboardData
+    const requestCache = {
+        userRoles: {},
+        userManagers: {},
+        downstreamEmployees: {}
+    };
+    
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const usersLastRow = usersSheet.getLastRow();
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+    
+    const getUserRoleMemo = (userEmail) => {
+        if (!userEmail) return "None";
+        if (requestCache.userRoles[userEmail] !== undefined) {
+            return requestCache.userRoles[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userRoles[userEmail] = usersData[i][2];
+                return usersData[i][2];
+            }
+        }
+        requestCache.userRoles[userEmail] = "None";
+        return "None";
+    };
+    
+    const getManagerForUserMemo = (userEmail) => {
+        if (!userEmail) return "";
+        if (requestCache.userManagers[userEmail] !== undefined) {
+            return requestCache.userManagers[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userManagers[userEmail] = usersData[i][3] || "";
+                return usersData[i][3] || "";
+            }
+        }
+        requestCache.userManagers[userEmail] = "";
+        return "";
+    };
+    
+    const role = getUserRoleMemo(email);
+    
+    const getDownstreamEmployeesMemo = (managerEmail) => {
+        if (!managerEmail) return [];
+        if (requestCache.downstreamEmployees[managerEmail] !== undefined) {
+            return requestCache.downstreamEmployees[managerEmail];
+        }
+        const result = getDownstreamEmployees(managerEmail, usersData);
+        requestCache.downstreamEmployees[managerEmail] = result;
+        return result;
+    };
+    
+    let downstreamEmails = [];
+    try {
+        downstreamEmails = getDownstreamEmployeesMemo(email);
+    } catch (e) {
+        Logger.log("ERROR in getDownstreamEmployees: " + e.message);
+        downstreamEmails = [];
+    }
+
+    // Fetch all projects with authorization
+    const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const projectsLastRow = projectsSheet.getLastRow();
+    const pData = projectsLastRow > 1 ? projectsSheet.getRange(2, 1, projectsLastRow - 1, 16).getValues() : [];
+    
+    let projects = [];
+    pData.forEach((row, idx) => {
+        try {
+            if (!row[0]) return;
+            
+            const projectOwner = row[2] || "";
+            let projectManager = row[3] || "";
+
+            if (!projectManager && projectOwner) {
+                projectManager = getManagerForUserMemo(projectOwner);
+            }
+
+            let canSeeProject = false;
+            if (role === "Admin") {
+                canSeeProject = true;
+            } else if (projectOwner === email) {
+                canSeeProject = true;
+            } else if (projectManager === email) {
+                canSeeProject = true;
+            } else if (projectOwner && downstreamEmails.includes(projectOwner)) {
+                canSeeProject = true;
+            }
+            
+            if (canSeeProject) {
+                projects.push({
+                    status: row[4],
+                    phase: row[5],
+                    percentageCompleted: row[6]
+                });
+            }
+        } catch (err) {
+            Logger.log("Error parsing project row " + idx + ": " + err.message);
+        }
+    });
+
+    // Fetch all actions with authorization
+    const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    const actionsLastRow = actionsSheet.getLastRow();
+    const aData = actionsLastRow > 1 ? actionsSheet.getRange(2, 1, actionsLastRow - 1, 9).getValues() : [];
+
+    let actions = [];
+    aData.forEach((row, idx) => {
+        try {
+            if (!row[0]) return;
+
+            const actionOwner = row[3] || "";
+            let canSeeAction = false;
+
+            if (role === "Admin") {
+                canSeeAction = true;
+            } else if (actionOwner === email) {
+                canSeeAction = true;
+            } else if (actionOwner && downstreamEmails.includes(actionOwner)) {
+                canSeeAction = true;
+            }
+
+            if (canSeeAction) {
+                actions.push({
+                    status: row[6],
+                    priority: row[5]
+                });
+            }
+        } catch (err) {
+            Logger.log("Error parsing action row " + idx + ": " + err.message);
+        }
+    });
+
+    // Calculate metrics
+    let totalProjects = projects.length;
+    let activeProjects = projects.filter(p => p.status !== "Completed" && p.status !== "Closure" && p.status !== "On Hold");
+    let completedProjects = projects.filter(p => p.status === "Completed" || p.status === "Closure");
+    let avgCompletion = totalProjects > 0 ? Math.round(projects.reduce((acc, curr) => acc + (Number(curr.percentageCompleted) || 0), 0) / totalProjects) : 0;
+    let blockedTasks = actions.filter(a => a.status === "Blocked").length;
+    let completedActions = actions.filter(a => a.status === "Completed").length;
+    let highPriorityActions = actions.filter(a => a.priority === "High" || a.priority === "Critical").length;
+    let onTrackProjects = projects.filter(p => (p.percentageCompleted || 0) >= 50).length;
+    let atRiskProjects = projects.filter(p => (p.percentageCompleted || 0) < 30 && p.status !== "Completed").length;
+
+    let statusCounts = {};
+    projects.forEach(p => {
+        statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
+    });
+
+    // Calculate phase completion averages
+    let phaseCompletion = {};
+    let phaseGroups = {};
+    projects.forEach(p => {
+        if (p.phase) {
+            if (!phaseGroups[p.phase]) {
+                phaseGroups[p.phase] = { total: 0, sum: 0 };
+            }
+            phaseGroups[p.phase].total++;
+            phaseGroups[p.phase].sum += (p.percentageCompleted || 0);
+        }
+    });
+    for (const [phase, data] of Object.entries(phaseGroups)) {
+        phaseCompletion[phase] = Math.round(data.sum / data.total);
+    }
+
+    const completionRate = totalProjects > 0 ? Math.round((completedProjects.length / totalProjects) * 100) : 0;
+
+    const metrics = {
+        totalActive: activeProjects.length,
+        averageCompletion: avgCompletion,
+        blockedActions: blockedTasks,
+        statusCounts: statusCounts,
+        totalProjects: totalProjects,
+        completedProjects: completedProjects.length,
+        completionRate: completionRate,
+        totalActions: actions.length,
+        completedActions: completedActions,
+        onTimeActions: actions.length - blockedTasks, // Simplified calculation
+        highPriorityActions: highPriorityActions,
+        phaseCompletion: phaseCompletion,
+        onTrackCount: onTrackProjects,
+        atRiskCount: atRiskProjects,
+        loaded: true
+    };
+
+    Logger.log("Metrics calculated: Projects=" + totalProjects + ", Actions=" + actions.length);
+    Logger.log("=== getMetrics END ===");
+
+    return metrics;
 }
 
 // === PERFORMANCE: Lazy-load project details on-demand ===

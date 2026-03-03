@@ -89,7 +89,17 @@
         role: "",
         projects: [],
         actions: [],
-        currentProjectId: null  // Track which project is being viewed in detail modal
+        currentProjectId: null,  // Track which project is being viewed in detail modal
+        settings: { projectTypes: [], phases: [], statuses: [] },
+        metrics: {}
+    };
+
+    // === TAB STATE: Manage status tabs and lazy loading ===
+    let tabState = {
+        currentStatus: "All",
+        statusTabs: [], // Will be populated from settings
+        tabData: {}, // Cache for each status tab: { "All": { projects: [], actions: [], currentPage: 1 }, "In Progress": {...} }
+        itemsPerPage: 50
     };
 
     function setGlobalLoading(isLoading, text = "Refreshing content...") {
@@ -294,6 +304,595 @@
                 .getDashboardData();
     }
 
+    // === TAB-BASED LAZY LOADING SYSTEM ===
+    
+    /**
+     * Initialize status tabs from settings
+     */
+    function initializeTabs() {
+        if (!appState.settings || !appState.settings.statuses) return;
+        
+        // Create tabs: ONLY status tabs (no "All" - that defeats the purpose!)
+        tabState.statusTabs = [...appState.settings.statuses];
+        renderTabs();
+        
+        // Load first status tab by default (e.g., "Not Started")
+        if (tabState.statusTabs.length > 0) {
+            switchTab(tabState.statusTabs[0]);
+        }
+    }
+    
+    /**
+     * Render tab navigation
+     */
+    function renderTabs() {
+        const tabsContainer = document.getElementById("statusTabs");
+        if (!tabsContainer) return;
+        
+        let html = '';
+        tabState.statusTabs.forEach((status, index) => {
+            const isActive = status === tabState.currentStatus ? 'active' : '';
+            const statusClass = getStatusClass(status);
+            const tabId = `tab-${status.replace(/\s+/g, '-')}`;
+            
+            html += `
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link ${isActive}" id="${tabId}" 
+                            data-bs-toggle="tab" 
+                            data-status="${escapeHtml(status)}"
+                            type="button" 
+                            role="tab"
+                            onclick="switchTab('${escapeHtml(status)}')">
+                        <span class="badge ${statusClass}">${escapeHtml(status)}</span>
+                    </button>
+                </li>
+            `;
+        });
+        
+        tabsContainer.innerHTML = html;
+    }
+    
+    /**
+     * Switch to a different status tab and load its data
+     */
+    function switchTab(status) {
+        console.log("Switching to tab:", status);
+        tabState.currentStatus = status;
+        
+        // Update UI
+        document.querySelectorAll('#statusTabs .nav-link').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        const tabId = `tab-${status.replace(/\s+/g, '-')}`;
+        const activeTab = document.getElementById(tabId);
+        if (activeTab) {
+            activeTab.classList.add('active');
+        }
+        
+        // Check if this tab's data is already loaded
+        if (tabState.tabData[status]) {
+            console.log("Using cached tab data for:", status);
+            renderTabContent(status);
+        } else {
+            // Load data for this tab
+            loadTabData(status);
+        }
+    }
+    
+    /**
+     * Load projects and actions for a specific status tab
+     */
+    function loadTabData(status) {
+        console.log("Loading data for tab:", status);
+        setGlobalLoading(true, `Loading ${status === "All" ? "all" : status} projects...`);
+        
+        const tabContent = document.getElementById("statusTabContent");
+        if (tabContent) {
+            tabContent.innerHTML = `
+                <div class="col-12 text-center text-muted py-5">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <div class="mt-2">Loading ${status === "All" ? "all" : status} projects...</div>
+                </div>
+            `;
+        }
+        
+        google.script.run
+            .withSuccessHandler(data => {
+                console.log(`Tab data received for ${status}:`, data.projects.length, "projects");
+                
+                // Cache the tab data
+                tabState.tabData[status] = {
+                    projects: data.projects || [],
+                    actions: data.actions || [],
+                    currentPage: 1
+                };
+                
+                renderTabContent(status);
+                setGlobalLoading(false);
+            })
+            .withFailureHandler(err => {
+                console.error("Failed to load tab data:", err);
+                const tabContent = document.getElementById("statusTabContent");
+                if (tabContent) {
+                    tabContent.innerHTML = `
+                        <div class='col-12 text-center text-danger py-5'>
+                            Failed to load projects. 
+                            <button class="btn btn-primary btn-sm mt-2" onclick="loadTabData('${status}')">Retry</button>
+                        </div>
+                    `;
+                }
+                setGlobalLoading(false);
+                showAlert("Error loading projects: " + err.message, "danger");
+            })
+            .getProjectsByStatus(status);
+    }
+    
+    /**
+     * Render the content for the current tab
+     */
+    function renderTabContent(status) {
+        const tabContent = document.getElementById("statusTabContent");
+        if (!tabContent) {
+            console.error("statusTabContent element not found");
+            return;
+        }
+        
+        const tabData = tabState.tabData[status];
+        if (!tabData) {
+            tabContent.innerHTML = '<div class="col-12 text-center text-muted py-5">No data available</div>';
+            return;
+        }
+        
+        // Apply filters to the projects
+        const filteredProjects = applyFiltersToProjects(tabData.projects);
+        tabData.filteredProjects = filteredProjects;
+        
+        console.log(`Rendering ${filteredProjects.length} filtered projects for ${status}`);
+        
+        // Populate project dropdown for action assignment
+        populateProjectDropdown();
+        
+        if (filteredProjects.length === 0) {
+            tabContent.innerHTML = '<div class="col-12 text-center text-muted py-5">No projects found matching filters</div>';
+            document.getElementById("paginationControls")?.classList.add("d-none");
+            return;
+        }
+        
+        // Render page
+        renderTabPage(status, tabData.currentPage, filteredProjects);
+    }
+    
+    /**
+     * Render a specific page within a tab
+     */
+    function renderTabPage(status, pageNum, filteredProjects) {
+        const tabContent = document.getElementById("statusTabContent");
+        if (!tabContent) return;
+        
+        const itemsPerPage = tabState.itemsPerPage;
+        const totalPages = Math.ceil(filteredProjects.length / itemsPerPage);
+        const startIdx = (pageNum - 1) * itemsPerPage;
+        const endIdx = Math.min(startIdx + itemsPerPage, filteredProjects.length);
+        const pageProjects = filteredProjects.slice(startIdx, endIdx);
+        
+        console.log(`Rendering page ${pageNum} of ${totalPages} (${pageProjects.length} projects)`);
+        
+        // Use DocumentFragment for efficient rendering
+        const fragment = document.createDocumentFragment();
+        const tempDiv = document.createElement('div');
+        tempDiv.className = 'row';
+        
+        pageProjects.forEach(project => {
+            const col = document.createElement('div');
+            col.className = 'col-md-6 col-lg-4 mb-4';
+            col.innerHTML = generateProjectCard(project);
+            tempDiv.appendChild(col);
+        });
+        
+        fragment.appendChild(tempDiv);
+        tabContent.innerHTML = '';
+        tabContent.appendChild(fragment);
+        
+        // Update pagination controls
+        updatePaginationControls(pageNum, totalPages, filteredProjects.length);
+        
+        // Smooth scroll to top
+        tabContent.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    
+    /**
+     * Update pagination controls visibility and state
+     */
+    function updatePaginationControls(currentPage, totalPages, totalItems) {
+        const controls = document.getElementById("paginationControls");
+        const pageInfo = document.getElementById("pageInfo");
+        const btnFirst = document.getElementById("btnFirstPage");
+        const btnPrev = document.getElementById("btnPrevPage");
+        const btnNext = document.getElementById("btnNextPage");
+        const btnLast = document.getElementById("btnLastPage");
+        
+        if (!controls) return;
+        
+        if (totalPages <= 1) {
+            controls.classList.add("d-none");
+            return;
+        }
+        
+        controls.classList.remove("d-none");
+        
+        if (pageInfo) {
+            pageInfo.textContent = `Page ${currentPage} of ${totalPages} (${totalItems} projects)`;
+        }
+        
+        if (btnFirst) btnFirst.disabled = currentPage === 1;
+        if (btnPrev) btnPrev.disabled = currentPage === 1;
+        if (btnNext) btnNext.disabled = currentPage === totalPages;
+        if (btnLast) btnLast.disabled = currentPage === totalPages;
+    }
+    
+    /**
+     * Change page within current tab
+     */
+    function changeTabPage(direction) {
+        const status = tabState.currentStatus;
+        const tabData = tabState.tabData[status];
+        if (!tabData || !tabData.filteredProjects) return;
+        
+        const totalPages = Math.ceil(tabData.filteredProjects.length / tabState.itemsPerPage);
+        let newPage = tabData.currentPage;
+        
+        switch (direction) {
+            case 'first':
+                newPage = 1;
+                break;
+            case 'prev':
+                newPage = Math.max(1, tabData.currentPage - 1);
+                break;
+            case 'next':
+                newPage = Math.min(totalPages, tabData.currentPage + 1);
+                break;
+            case 'last':
+                newPage = totalPages;
+                break;
+        }
+        
+        if (newPage !== tabData.currentPage) {
+            tabData.currentPage = newPage;
+            renderTabPage(status, newPage, tabData.filteredProjects);
+        }
+    }
+    
+    /**
+     * Refresh the current tab only
+     */
+    function refreshCurrentTab() {
+        const status = tabState.currentStatus;
+        console.log("Refreshing current tab:", status);
+        
+        // Clear cached data for this tab
+        delete tabState.tabData[status];
+        
+        // Reload
+        loadTabData(status);
+    }
+    
+    /**
+     * Refresh all tabs and clear all caches
+     */
+    function refreshAll() {
+        console.log("Refreshing all data and clearing caches");
+        
+        // Clear all caches
+        SESSION_CACHE.invalidate();
+        tabState.tabData = {};
+        
+        // Reload settings and tabs
+        setGlobalLoading(true, "Clearing cache and reloading...");
+        
+        google.script.run
+            .withSuccessHandler(data => {
+                if (!data) {
+                    showAlert("No data returned from server", "danger");
+                    setGlobalLoading(false);
+                    return;
+                }
+                
+                // Update app state with fresh settings
+                appState = {
+                    email: data.email || "",
+                    role: data.role || "",
+                    projects: [],
+                    actions: [],
+                    settings: data.settings || { projectTypes: [], phases: [], statuses: [] },
+                    metrics: data.metrics || {},
+                    currentProjectId: appState.currentProjectId
+                };
+                
+                window.allUsers = data.users || [];
+                
+                populateDropdowns();
+                renderHeader();
+                applyRBAC();
+                
+                // Re-initialize tabs
+                initializeTabs();
+                
+                setGlobalLoading(false);
+                showAlert("All data refreshed successfully", "success");
+            })
+            .withFailureHandler(err => {
+                console.error("Failed to refresh all:", err);
+                setGlobalLoading(false);
+                showAlert("Error refreshing data: " + err.message, "danger");
+            })
+            .getDashboardData();
+    }
+    
+    /**
+     * Refresh a single project's data
+     */
+    function refreshProject(projectId) {
+        console.log("Refreshing project:", projectId);
+        setGlobalLoading(true, "Refreshing project...");
+        
+        google.script.run
+            .withSuccessHandler(details => {
+                setGlobalLoading(false);
+                
+                if (!details) {
+                    showAlert("Failed to refresh project", "danger");
+                    return;
+                }
+                
+                // Update the project in current tab data
+                const status = tabState.currentStatus;
+                const tabData = tabState.tabData[status];
+                
+                if (tabData && tabData.projects) {
+                    const index = tabData.projects.findIndex(p => p.id === projectId);
+                    if (index !== -1) {
+                        // Merge updated data
+                        tabData.projects[index] = { 
+                            ...tabData.projects[index], 
+                            ...details,
+                            commentCount: details.comments ? details.comments.length : 0,
+                            lastComment: details.comments && details.comments.length > 0 ? 
+                                details.comments[details.comments.length - 1] : null
+                        };
+                        
+                        // Re-render current tab
+                        renderTabContent(status);
+                        showAlert("Project refreshed", "success");
+                    }
+                }
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error refreshing project: " + err.message, "danger");
+            })
+            .getProjectDetails(projectId);
+    }
+    
+    /**
+     * Apply filters to a list of projects
+     */
+    function applyFiltersToProjects(projects) {
+        const phase = document.getElementById("filterPhase")?.value || "All";
+        const owner = document.getElementById("filterOwner")?.value || "All";
+        const dateFrom = document.getElementById("filterDateFrom")?.value || "";
+        const dateTo = document.getElementById("filterDateTo")?.value || "";
+        
+        return projects.filter(project => {
+            // Phase filter
+            if (phase !== "All" && project.phase !== phase) return false;
+            
+            // Owner filter
+            if (owner !== "All" && project.owner !== owner) return false;
+            
+            // Date range filter
+            if (dateFrom || dateTo) {
+                const lastUpdated = project.lastUpdatedDate;
+                if (!lastUpdated) return false;
+                
+                const projectDate = new Date(lastUpdated);
+                if (dateFrom && projectDate < new Date(dateFrom)) return false;
+                if (dateTo && projectDate > new Date(dateTo)) return false;
+            }
+            
+            return true;
+        });
+    }
+    
+    /**
+     * Generate HTML for a project card
+     */
+    function generateProjectCard(project) {
+        const projectActions = tabState.tabData[tabState.currentStatus]?.actions.filter(a => a.projectId === project.id) || [];
+        const statusClass = getStatusClass(project.status);
+        const phaseClass = getPhaseClass(project.phase);
+        
+        let actionsHtml = '';
+        if (projectActions.length > 0) {
+            actionsHtml = '<div class="mt-2"><small class="text-muted fw-bold">Actions:</small>';
+            projectActions.slice(0, 3).forEach(action => {
+                const actionStatusClass = action.status === "Completed" ? "success" : 
+                                         action.status === "In Progress" ? "primary" : "secondary";
+                actionsHtml += `
+                    <div class="d-flex justify-content-between align-items-center mt-1 p-2 bg-light rounded">
+                        <small>${escapeHtml(action.description || 'No description')}</small>
+                        <span class="badge bg-${actionStatusClass}">${escapeHtml(action.status)}</span>
+                    </div>
+                `;
+            });
+            if (projectActions.length > 3) {
+                actionsHtml += `<small class="text-muted">... and ${projectActions.length - 3} more</small>`;
+            }
+            actionsHtml += '</div>';
+        }
+        
+        return `
+            <div class="card h-100 shadow-sm hover-shadow">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="card-title mb-0 fw-bold">${escapeHtml(project.name)}</h6>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="refreshProject('${escapeHtml(project.id)}')" title="Refresh this project">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="currentColor" viewBox="0 0 16 16">
+                                <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+                                <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="mb-2">
+                        <span class="badge ${statusClass}">${escapeHtml(project.status)}</span>
+                        <span class="badge ${phaseClass}">${escapeHtml(project.phase)}</span>
+                    </div>
+                    <p class="card-text small text-muted mb-2">
+                        <strong>Owner:</strong> ${escapeHtml(project.owner)}<br>
+                        <strong>Progress:</strong> ${escapeHtml(project.percentageCompleted || 0)}%
+                    </p>
+                    <div class="progress mb-2" style="height: 8px;">
+                        <div class="progress-bar ${project.percentageCompleted >= 100 ? 'bg-success' : 'bg-primary'}" 
+                             style="width: ${project.percentageCompleted || 0}%"></div>
+                    </div>
+                    ${actionsHtml}
+                    ${project.lastComment ? `
+                        <div class="mt-2 p-2 bg-light rounded">
+                            <small class="text-muted d-block"><strong>Latest Update:</strong></small>
+                            <small>${escapeHtml(project.lastComment.text || '')}</small>
+                            <br><small class="text-muted">${escapeHtml(project.lastComment.timestamp || '')}</small>
+                        </div>
+                    ` : ''}
+                    <div class="mt-3 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-sm btn-outline-info" onclick="expandProjectDetail('${escapeHtml(project.id)}')">📋 View Details</button>
+                        <button class="btn btn-sm btn-primary" onclick="openEditProjectModal('${escapeHtml(project.id)}')">✏️ Edit</button>
+                        ${project.commentCount > 0 ? `<button class="btn btn-sm btn-outline-secondary" onclick="viewProjectHistory('${escapeHtml(project.id)}')">📜 ${project.commentCount} Updates</button>` : ''}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    /**
+     * Get Bootstrap class for status badge
+     */
+    function getStatusClass(status) {
+        switch (status) {
+            case "Not Started": return "bg-secondary";
+            case "In Progress": return "bg-primary";
+            case "On Hold": return "bg-warning text-dark";
+            case "Completed": return "bg-success";
+            case "Cancelled": return "bg-danger";
+            default: return "bg-secondary";
+        }
+    }
+    
+    /**
+     * Get Bootstrap class for phase badge
+     */
+    function getPhaseClass(phase) {
+        switch (phase) {
+            case "Planning": return "bg-info";
+            case "Execution": return "bg-warning text-dark";
+            case "Monitoring": return "bg-primary";
+            case "Closure": return "bg-success";
+            default: return "bg-secondary";
+        }
+    }
+    
+    /**
+     * Populate project dropdown for action assignment from all loaded tabs
+     */
+    function populateProjectDropdown() {
+        const select = document.getElementById("aProjectSelect");
+        if (!select) return;
+        
+        select.innerHTML = '<option value="">Select Project...</option>';
+        
+        // Collect all projects from all loaded tabs
+        const allProjects = [];
+        for (const status in tabState.tabData) {
+            const tabData = tabState.tabData[status];
+            if (tabData && tabData.projects) {
+                allProjects.push(...tabData.projects);
+            }
+        }
+        
+        // Remove duplicates by ID
+        const uniqueProjects = [];
+        const seenIds = new Set();
+        for (const project of allProjects) {
+            if (!seenIds.has(project.id)) {
+                seenIds.add(project.id);
+                uniqueProjects.push(project);
+            }
+        }
+        
+        // Sort by name
+        uniqueProjects.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        
+        // Populate dropdown
+        uniqueProjects.forEach(p => {
+            select.innerHTML += `<option value="${p.id}">${escapeHtml(p.name)} (${p.id})</option>`;
+        });
+    }
+
+    // --- Original load dashboard - now just loads settings and initializes tabs ---
+    function loadDashboard(callback, forceRefresh = false) {
+        console.log("1. Starting loadDashboard()...");
+        
+        setGlobalLoading(true, "Loading dashboard...");
+        google.script.run
+            .withSuccessHandler(data => {
+                console.log("2. Dashboard data received");
+                
+                if (!data) {
+                    showAlert("No data returned from server", "danger");
+                    setGlobalLoading(false);
+                    return;
+                }
+                
+                appState = {
+                    email: data.email || "",
+                    role: data.role || "",
+                    projects: [],
+                    actions: [],
+                    settings: data.settings || { projectTypes: [], phases: [], statuses: [] },
+                    metrics: data.metrics || {},
+                    currentProjectId: appState.currentProjectId
+                };
+
+                window.allUsers = data.users || [];
+
+                console.log("3. Populating Dropdowns...");
+                populateDropdowns();
+
+                console.log("4. Rendering Header...");
+                renderHeader();
+
+                console.log("5. Initializing Tabs...");
+                initializeTabs();
+
+                console.log("6. Applying RBAC...");
+                applyRBAC();
+
+                console.log("7. Dashboard load successfully finished.");
+                if (callback && typeof callback === 'function') {
+                    callback();
+                }
+                setGlobalLoading(false);
+            })
+            .withFailureHandler(err => {
+                console.error("Dashboard load failed:", err);
+                const tabContent = document.getElementById("statusTabContent");
+                if (tabContent) {
+                    tabContent.innerHTML = `<div class='col-12 text-center text-danger py-5'>Failed to load data. Please refresh.</div>`;
+                }
+                showAlert("Error loading dashboard: " + err.message, "danger");
+                setGlobalLoading(false);
+            })
+            .getDashboardData();
+    }
+
     // --- Renderers ---
     function renderHeader() {
         document.getElementById("userInfo").innerHTML = `
@@ -301,82 +900,32 @@
       <span class="badge bg-secondary">${escapeHtml(appState.role || "")}</span>
     `;
 
-        // Enhanced Metrics
-        if (appState && appState.metrics) {
-            // Core metrics
-            document.getElementById("metricActive").textContent = appState.metrics.totalActive || 0;
-            document.getElementById("metricAvg").textContent = appState.metrics.averageCompletion || 0;
-            document.getElementById("metricBlocked").textContent = appState.metrics.blockedActions || 0;
-
-            // Calculate additional metrics
-            const totalProjects = appState.projects.length || 0;
-            const completedProjects = appState.projects.filter(p => p.status === "Completed" || p.status === "Closure").length || 0;
-            const completionRate = totalProjects > 0 ? Math.round((completedProjects / totalProjects) * 100) : 0;
-            
-            const totalActions = appState.actions.length || 0;
-            const completedActions = appState.actions.filter(a => a.status === "Completed").length || 0;
-            const onTimeActions = appState.actions.filter(a => {
-                if (a.dueDate) {
-                    const dueDate = new Date(a.dueDate);
-                    return dueDate >= new Date();
-                }
-                return true;
-            }).length || 0;
-            
-            const highPriorityActions = appState.actions.filter(a => a.priority === "High" || a.priority === "Critical").length || 0;
-            const avgCompletionByPhase = calculatePhaseCompletion();
-            
-            // Update extended metrics
-            document.getElementById("metricTotal").textContent = totalProjects;
-            document.getElementById("metricCompleted").textContent = completedProjects;
-            document.getElementById("metricCompletionRate").textContent = completionRate;
-            document.getElementById("metricActions").textContent = totalActions;
-            document.getElementById("metricCompletedActions").textContent = completedActions;
-            document.getElementById("metricOnTime").textContent = onTimeActions;
-            document.getElementById("metricHighPriority").textContent = highPriorityActions;
-
-            // Status breakdown
-            let statusHtml = "";
-            for (const [status, count] of Object.entries(appState.metrics.statusCounts || {})) {
-                statusHtml += `<div class="d-flex justify-content-between mb-1"><span class="text-muted">${escapeHtml(status)}</span><span class="fw-bold">${count}</span></div>`;
-            }
-            document.getElementById("metricStatuses").innerHTML = statusHtml || "No projects.";
-            
-            // Calculate phase completion and health metrics
-            calculatePhaseCompletion();
+        // === PERFORMANCE: Metrics loaded on-demand, show placeholder if not loaded ===
+        if (appState.metrics && appState.metrics.loaded) {
+            renderMetrics();
+        } else {
+            // Show placeholder values
+            document.getElementById("metricActive").textContent = "-";
+            document.getElementById("metricAvg").textContent = "-";
+            document.getElementById("metricBlocked").textContent = "-";
+            document.getElementById("metricTotal").textContent = "-";
+            document.getElementById("metricCompleted").textContent = "-";
+            document.getElementById("metricCompletionRate").textContent = "-";
+            document.getElementById("metricActions").textContent = "-";
+            document.getElementById("metricCompletedActions").textContent = "-";
+            document.getElementById("metricOnTime").textContent = "-";
+            document.getElementById("metricHighPriority").textContent = "-";
+            document.getElementById("onTrackProjects").textContent = "-";
+            document.getElementById("atRiskProjects").textContent = "-";
+            document.getElementById("metricStatuses").innerHTML = '<small class="text-muted">Click "Expand" to load metrics</small>';
+            document.getElementById("metricPhaseBreakdown").innerHTML = '<small class="text-muted">Click "Expand" to load metrics</small>';
         }
     }
 
     function calculatePhaseCompletion() {
-        const phases = {};
-        appState.projects.forEach(p => {
-            if (!phases[p.phase]) {
-                phases[p.phase] = { total: 0, sum: 0 };
-            }
-            phases[p.phase].total++;
-            phases[p.phase].sum += (p.percentageCompleted || 0);
-        });
-        
-        let html = "";
-        for (const [phase, data] of Object.entries(phases)) {
-            const avg = Math.round(data.sum / data.total);
-            html += `<small class="d-block mb-1"><span class="text-muted">${phase}:</span> <strong>${avg}%</strong></small>`;
-        }
-        if (document.getElementById("metricPhaseBreakdown")) {
-            document.getElementById("metricPhaseBreakdown").innerHTML = html || "No phases.";
-        }
-        
-        // Calculate health score and risk metrics
-        const totalProjects = appState.projects.length || 1;
-        const onTrackCount = appState.projects.filter(p => (p.percentageCompleted || 0) >= 50).length;
-        const atRiskCount = appState.projects.filter(p => (p.percentageCompleted || 0) < 30 && p.status !== "Completed").length;
-        const healthScore = Math.round((appState.metrics?.averageCompletion || 0) + (onTrackCount / totalProjects * 20));
-        
-        document.getElementById("onTrackProjects").textContent = onTrackCount;
-        document.getElementById("atRiskProjects").textContent = atRiskCount;
-        document.getElementById("healthScore").style.width = Math.min(100, healthScore) + "%";
-        
-        return html;
+        // This function is no longer needed as metrics come from server
+        // Keeping it for backwards compatibility but it returns empty
+        return {};
     }
 
     function applyRBAC() {
@@ -417,7 +966,7 @@
         fill('pType', appState.settings.projectTypes || []);
         fill('pStatus', appState.settings.statuses || []);
         fill('pPhase', appState.settings.phases || []);
-        fill('filterStatus', ["All", ...(appState.settings.statuses || [])]);
+        // No filterStatus - using tabs instead
         fill('filterPhase', ["All", ...(appState.settings.phases || [])]);
         fill('uStatus', appState.settings.statuses || []);
         fill('editProjectType', appState.settings.projectTypes || []);
@@ -693,7 +1242,7 @@
             return;
         }
 
-        const proj = appState.projects.find(p => p.id === projId);
+        const proj = findProjectById(projId);
         if (!proj) {
             assignedDisplay.textContent = 'Project owner not found';
             assignedEmail.value = '';
@@ -781,11 +1330,14 @@
 
     function expandProjectDetail(projectId) {
         appState.currentProjectId = projectId;  // Track current project
-        const project = appState.projects.find(p => p.id === projectId);
-        if (!project) return;
+        const project = findProjectById(projectId);
+        if (!project) {
+            showAlert("Project not found. Try refreshing the tab.", "warning");
+            return;
+        }
 
         const modal = new bootstrap.Modal(document.getElementById("projectDetailModal") || createProjectDetailModal());
-        document.getElementById("projectDetailTitle").textContent = escapeHtml(project.name);
+        document.getElementById("projectDetailTitle").textContent = project.name;
         
         const detailBody = document.getElementById("projectDetailBody");
         const progressWidth = Math.min(100, project.percentageCompleted || 0);
@@ -823,7 +1375,7 @@
                 <div class="alert alert-light border mb-0">
                     <small>${escapeHtml(project.lastComment ? project.lastComment.text : "No updates yet.")}</small>
                 </div>
-                ${project.commentCount > 0 ? `<button class="btn btn-sm btn-outline-secondary mt-2" onclick="viewProjectHistory('${escapeHtml(project.id)}')">View All ${project.commentCount} Updates</button>` : ''}
+                ${project.commentCount > 0 ? `<button class="btn btn-sm btn-info text-white mt-2" onclick="viewProjectHistory('${escapeHtml(project.id)}')">📜 View All ${project.commentCount} Updates</button>` : ''}
             </div>
 
             <hr>
@@ -948,8 +1500,6 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-sm btn-warning text-dark" id="btnEditProject" onclick="openEditProjectModalFromDetail()" style="display:none;">✏️ Edit Project</button>
-                        <button type="button" class="btn btn-sm btn-info text-white" id="btnAddNote" onclick="openAddNoteModal()">📝 Add Note</button>
-                        <button type="button" class="btn btn-sm btn-secondary" id="btnViewHistory" onclick="openProjectHistoryModal()">📋 View Notes</button>
                         <button type="button" class="btn btn-sm btn-success text-white" id="btnAssignAction" onclick="openAssignActionModalFromDetail()" style="display:none;">🎯 Assign Action</button>
                         <button type="button" class="btn btn-sm btn-danger d-none" id="btnDeleteProject" onclick="confirmDeleteProject()">🗑️ Delete</button>
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -962,10 +1512,10 @@
     }
 
     function renderProjectActions(projectId) {
-        const projActions = appState.actions.filter(a => a.projectId === projectId);
+        const projActions = getActionsForProject(projectId);
         if (projActions.length === 0) return "<small class='text-muted'>No actions assigned yet.</small>";
 
-        const proj = appState.projects.find(p => p.id === projectId) || {};
+        const proj = findProjectById(projectId) || {};
         const projPhase = proj.phase || '';
 
         let html = "";
@@ -1048,8 +1598,12 @@
 
     // === PERFORMANCE: Debounced filter application (200ms delay) ===
     const debouncedApplyFilters = debounce(() => {
-        populateDropdowns();
-        renderProjects();
+        console.log("Applying filters to current tab");
+        
+        // Re-render current tab with new filters
+        if (tabState.currentStatus && tabState.tabData[tabState.currentStatus]) {
+            renderTabContent(tabState.currentStatus);
+        }
     }, 200);
     
     function applyFilters() {
@@ -1057,7 +1611,6 @@
     }
 
     function clearFilters() {
-        document.getElementById("filterStatus").value = "All";
         document.getElementById("filterPhase").value = "All";
         const ownerEl = document.getElementById("filterOwner");
         if (ownerEl) ownerEl.value = "All";
@@ -1139,11 +1692,12 @@
                 btn.disabled = false;
                 btn.innerHTML = "Create Project";
 
-                // === PERFORMANCE: Invalidate cache and do lightweight refresh ===
+                // === PERFORMANCE: Clear caches and refresh current tab ===
                 showAlert("Project Created Successfully!", "success");
                 SESSION_CACHE.invalidate();
-                // Force refresh to get new project
-                loadDashboard(() => setGlobalLoading(false), true);
+                
+                // Refresh current tab to show new project
+                refreshCurrentTab();
             })
             .withFailureHandler(err => {
                 showAlert(err.message, "danger");
@@ -1200,7 +1754,7 @@
 
     function openUpdateModal(actionId, currentStatus, currentPct) {
         // FIXED: Validate that action exists
-        const action = appState.actions.find(a => a.id === actionId);
+        const action = findActionById(actionId);
         if (!action) {
             showAlert("Action not found in your dataset", "danger");
             return;
@@ -1238,21 +1792,31 @@
                 
                 // === PERFORMANCE: Differential update instead of full reload ===
                 if (res && res.success && res.action) {
-                    // Update action in appState
-                    const actionIndex = appState.actions.findIndex(a => a.id === actionId);
-                    if (actionIndex !== -1) {
-                        appState.actions[actionIndex] = { ...appState.actions[actionIndex], ...res.action };
+                    // Update action in tab data
+                    let updated = false;
+                    for (const status in tabState.tabData) {
+                        if (tabState.tabData[status] && tabState.tabData[status].actions) {
+                            const actionIndex = tabState.tabData[status].actions.findIndex(a => a.id === actionId);
+                            if (actionIndex !== -1) {
+                                tabState.tabData[status].actions[actionIndex] = { ...tabState.tabData[status].actions[actionIndex], ...res.action };
+                                updated = true;
+                                break;
+                            }
+                        }
                     }
                     
                     // Update cache
                     SESSION_CACHE.updateItem('actions', actionId, res.action);
                     
-                    // Re-render only affected parts
-                    renderProjects();
+                    // Re-render current tab
+                    if (updated) {
+                        renderTabContent(tabState.currentStatus);
+                    }
                     setGlobalLoading(false);
                 } else {
                     // Fallback to full reload if server doesn't return differential data
-                    loadDashboard(() => setGlobalLoading(false));
+                    refreshTab(tabState.currentStatus);
+                    setGlobalLoading(false);
                 }
             })
             .withFailureHandler(err => {
@@ -1287,6 +1851,7 @@
                 } else {
                     let html = '<div class="list-group">';
                     details.comments.forEach(c => {
+                        const canEdit = appState.role === 'Admin' || c.user === appState.email;
                         html += `
                             <div class="list-group-item">
                                 <div class="d-flex w-100 justify-content-between">
@@ -1294,6 +1859,12 @@
                                     <small class="text-muted">${escapeHtml(c.timestamp || '')}</small>
                                 </div>
                                 <p class="mb-1">${escapeHtml(c.text || '')}</p>
+                                ${canEdit ? `
+                                    <div class="mt-2">
+                                        <button class="btn btn-sm btn-outline-primary" onclick="openEditNoteModal('${escapeHtml(projectId)}', '${escapeHtml(c.timestamp)}', \`${escapeHtml(c.text)}\`)">Edit</button>
+                                        <button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteNote('${escapeHtml(projectId)}', '${escapeHtml(c.timestamp)}')">Delete</button>
+                                    </div>
+                                ` : ''}
                             </div>
                         `;
                     });
@@ -1324,10 +1895,51 @@
         return d.toISOString().split('T')[0];
     }
 
+    /**
+     * Find a project by ID across all loaded tabs
+     */
+    function findProjectById(projectId) {
+        // Search through all loaded tab data
+        for (const status in tabState.tabData) {
+            const tabData = tabState.tabData[status];
+            if (tabData && tabData.projects) {
+                const project = tabData.projects.find(p => p.id === projectId);
+                if (project) {
+                    return project;
+                }
+            }
+        }
+        return null;
+    }
+
+    // Helper: Get all actions from loaded tabs for a specific project
+    function getActionsForProject(projectId) {
+        const allActions = [];
+        for (const status in tabState.tabData) {
+            if (tabState.tabData[status] && tabState.tabData[status].actions) {
+                const projectActions = tabState.tabData[status].actions.filter(a => a.projectId === projectId);
+                allActions.push(...projectActions);
+            }
+        }
+        return allActions;
+    }
+
+    // Helper: Find an action by ID across all loaded tabs
+    function findActionById(actionId) {
+        for (const status in tabState.tabData) {
+            if (tabState.tabData[status] && tabState.tabData[status].actions) {
+                const action = tabState.tabData[status].actions.find(a => a.id === actionId);
+                if (action) return action;
+            }
+        }
+        return null;
+    }
+    
     function openEditProjectModal(projectId) {
-        const project = appState.projects.find(p => p.id === projectId);
+        // Look for project in tab data instead of appState.projects
+        const project = findProjectById(projectId);
         if (!project) {
-            showAlert("Project not found", "danger");
+            showAlert("Project not found. Try refreshing the tab containing this project.", "warning");
             return;
         }
 
@@ -1397,9 +2009,9 @@
                 btn.innerHTML = "Save Changes";
 
                 showAlert("Project updated successfully!", "success");
-                // === PERFORMANCE: Invalidate cache and force refresh ===
+                // === PERFORMANCE: Clear caches and refresh affected project ===
                 SESSION_CACHE.invalidate();
-                loadDashboard(() => setGlobalLoading(false), true);
+                refreshProject(projectId);
             })
             .withFailureHandler(err => {
                 showAlert("Error: " + err.message, "danger");
@@ -1434,21 +2046,8 @@
 
                 showAlert("Comment added.", "success");
                 
-                // === PERFORMANCE: Differential update instead of full reload ===
-                // Update project in appState
-                const projectIndex = appState.projects.findIndex(p => p.id === pId);
-                if (projectIndex !== -1) {
-                    appState.projects[projectIndex].commentCount = (appState.projects[projectIndex].commentCount || 0) + 1;
-                    appState.projects[projectIndex].lastComment = {
-                        user: appState.email,
-                        timestamp: new Date().toISOString(),
-                        text: text
-                    };
-                    appState.projects[projectIndex].lastUpdatedDate = new Date().toLocaleString();
-                }
-                
-                // Invalidate cache to get fresh data on next reload
-                SESSION_CACHE.invalidate();
+                // === PERFORMANCE: Refresh only the affected project ===
+                refreshProject(pId);
                 
                 setGlobalLoading(false);
             })
@@ -1638,9 +2237,9 @@
             showAlert("No project selected", "warning");
             return;
         }
-        const project = appState.projects.find(p => p.id === appState.currentProjectId);
+        const project = findProjectById(appState.currentProjectId);
         if (!project) {
-            showAlert("Project not found", "danger");
+            showAlert("Project not found. Try refreshing the tab.", "warning");
             return;
         }
         // Use project updates as history
@@ -1650,9 +2249,9 @@
 
     function openProjectNotesModal(projectId) {
         appState.currentProjectId = projectId;
-        const project = appState.projects.find(p => p.id === projectId);
+        const project = findProjectById(projectId);
         if (!project) {
-            showAlert("Project not found", "danger");
+            showAlert("Project not found. Try refreshing the tab.", "warning");
             return;
         }
         
@@ -1788,7 +2387,7 @@
 
     // rebuild the history/notes panel when the modal is already visible
     function refreshHistoryContent(projectId) {
-        const project = appState.projects.find(p => p.id === projectId);
+        const project = findProjectById(projectId);
         if (!project) return;
         const container = document.getElementById("historyTimeline");
         if (!container) return;
@@ -1832,19 +2431,82 @@
         const metricsDiv = document.getElementById("rollupMetrics");
         const btn = document.getElementById("metricsToggleBtn");
         const icon = document.getElementById("metricsToggleIcon");
-        // update icon and label text
         const label = btn.querySelector('.btn-label');
+        
         if (metricsDiv.classList.contains("collapsed")) {
-            // expand
-            metricsDiv.classList.remove("collapsed");
-            icon.textContent = "▼";
-            if (label) label.textContent = " Collapse";
+            // === PERFORMANCE: Load metrics on-demand when expanding ===
+            if (!appState.metrics || !appState.metrics.loaded) {
+                // Metrics not loaded yet, fetch them
+                btn.disabled = true;
+                icon.textContent = "⏳";
+                if (label) label.textContent = " Loading...";
+                
+                google.script.run
+                    .withSuccessHandler(metrics => {
+                        appState.metrics = metrics;
+                        renderMetrics();
+                        
+                        // Now expand
+                        metricsDiv.classList.remove("collapsed");
+                        icon.textContent = "▼";
+                        if (label) label.textContent = " Collapse";
+                        btn.disabled = false;
+                    })
+                    .withFailureHandler(err => {
+                        showAlert("Failed to load metrics: " + err.message, "danger");
+                        icon.textContent = "▶";
+                        if (label) label.textContent = " Expand";
+                        btn.disabled = false;
+                    })
+                    .getMetrics();
+            } else {
+                // Metrics already loaded, just expand
+                metricsDiv.classList.remove("collapsed");
+                icon.textContent = "▼";
+                if (label) label.textContent = " Collapse";
+            }
         } else {
             // collapse
             metricsDiv.classList.add("collapsed");
             icon.textContent = "▶";
             if (label) label.textContent = " Expand";
         }
+    }
+    
+    /**
+     * Render metrics in the dashboard
+     */
+    function renderMetrics() {
+        if (!appState.metrics || !appState.metrics.loaded) return;
+        
+        const metrics = appState.metrics;
+        
+        document.getElementById("metricActive").textContent = metrics.totalActive || 0;
+        document.getElementById("metricAvg").textContent = metrics.averageCompletion || 0;
+        document.getElementById("metricBlocked").textContent = metrics.blockedActions || 0;
+        document.getElementById("metricTotal").textContent = metrics.totalProjects || 0;
+        document.getElementById("metricCompleted").textContent = metrics.completedProjects || 0;
+        document.getElementById("metricCompletionRate").textContent = metrics.completionRate || 0;
+        document.getElementById("metricActions").textContent = metrics.totalActions || 0;
+        document.getElementById("metricCompletedActions").textContent = metrics.completedActions || 0;
+        document.getElementById("metricOnTime").textContent = metrics.onTimeActions || 0;
+        document.getElementById("metricHighPriority").textContent = metrics.highPriorityActions || 0;
+        document.getElementById("onTrackProjects").textContent = metrics.onTrackCount || 0;
+        document.getElementById("atRiskProjects").textContent = metrics.atRiskCount || 0;
+
+        // Status breakdown
+        let statusHtml = "";
+        for (const [status, count] of Object.entries(metrics.statusCounts || {})) {
+            statusHtml += `<div class="d-flex justify-content-between mb-1"><span class="text-muted">${escapeHtml(status)}</span><span class="fw-bold">${count}</span></div>`;
+        }
+        document.getElementById("metricStatuses").innerHTML = statusHtml || "No projects.";
+        
+        // Phase breakdown
+        let phaseHtml = "";
+        for (const [phase, avg] of Object.entries(metrics.phaseCompletion || {})) {
+            phaseHtml += `<div class="d-flex justify-content-between mb-1"><span class="text-muted">${escapeHtml(phase)}</span><span class="fw-bold">${avg}%</span></div>`;
+        }
+        document.getElementById("metricPhaseBreakdown").innerHTML = phaseHtml || "No data.";
     }
 
     function getLatestProjectUpdate(project) {
