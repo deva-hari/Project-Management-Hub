@@ -6,6 +6,46 @@ const SHEET_NAMES = {
     SETTINGS: "Settings"
 };
 
+// --- PROJECT & ACTION STATUS CONSTANTS ---
+const PROJECT_STATUSES = {
+    NOT_STARTED: "Not Started",
+    IN_PROGRESS: "In Progress",
+    ON_HOLD: "On Hold",
+    COMPLETED: "Completed",
+    CANCELLED: "Cancelled",
+    CLOSURE: "Closure"
+};
+
+const PROJECT_PHASES = {
+    OPEN: "Open",
+    PLANNING: "Planning",
+    EXECUTION: "Execution",
+    MONITORING: "Monitoring",
+    CLOSURE: "Closure"
+};
+
+const ACTION_STATUSES = {
+    PENDING: "Pending",
+    IN_PROGRESS: "In Progress",
+    COMPLETED: "Completed",
+    ON_HOLD: "On Hold",
+    CANCELLED: "Cancelled"
+};
+
+const PRIORITIES = {
+    LOW: "Low",
+    MEDIUM: "Medium",
+    HIGH: "High",
+    CRITICAL: "Critical"
+};
+
+const USER_ROLES = {
+    NONE: "None",
+    MANAGER: "Manager",
+    ADMIN: "Admin",
+    ACTION_OWNER: "Action Owner"
+};
+
 // --- UTILITY: IST Timezone Formatter ---
 // Converts dates to Indian Standard Time (IST, UTC+5:30)
 function formatDateToIST(dateInput) {
@@ -70,6 +110,52 @@ function formatDateOnlyIST(dateInput) {
         Logger.log("Error formatting date: " + e.toString());
         return "";
     }
+}
+
+// --- HELPER FUNCTIONS FOR AUTHORIZATION & VALIDATION ---
+
+/**
+ * Check if user can update/edit a project
+ * Returns true if user is Admin, project owner, or project manager
+ */
+function canUpdateProject(userEmail, projectOwner, projectManager, userRole) {
+    return userRole === USER_ROLES.ADMIN || 
+           userEmail === projectOwner || 
+           userEmail === projectManager;
+}
+
+/**
+ * Check if user can access a project
+ * Extended logic supporting downstream employee hierarchies
+ */
+function canAccessProject(userEmail, projectOwner, projectManager, userRole, downstreamEmails) {
+    if (userRole === USER_ROLES.ADMIN) return true;
+    if (userEmail === projectOwner) return true;
+    if (userEmail === projectManager) return true;
+    if (projectOwner && downstreamEmails && downstreamEmails.includes(projectOwner)) return true;
+    return false;
+}
+
+/**
+ * Create a request cache object for memoization to avoid repeated data fetches
+ */
+function createRequestCache() {
+    return {
+        userRoles: {},
+        userManagers: {},
+        downstreamEmployees: {},
+        userEmails: {}
+    };
+}
+
+/**
+ * Get or compute value in cache
+ */
+function getFromCache(cache, key, computeFn) {
+    if (!(key in cache)) {
+        cache[key] = computeFn();
+    }
+    return cache[key];
 }
 
 // --- ROUTING ---
@@ -625,8 +711,8 @@ function getDashboardData() {
                     outcomes: row[9],
                     risks: row[10],
                     lastUpdatedText: row[11],
-                    createdAt: row[12] ? new Date(row[12]).toLocaleString() : "",
-                    lastUpdatedDate: row[13] ? new Date(row[13]).toLocaleString() : "",
+                    createdAt: row[12] ? formatDateToIST(row[12]) : "",
+                    lastUpdatedDate: row[13] ? formatDateToIST(row[13]) : "",
                     projectType: row[15] || "Other",
                     // === PERFORMANCE: Lazy load - only send summary, not full comments ===
                     commentCount: commentCount,
@@ -698,7 +784,7 @@ function getDashboardData() {
                     status: row[4],
                     percentageCompleted: row[5],
                     priority: row[6],
-                    lastUpdatedDate: row[7] ? new Date(row[7]).toLocaleString() : "",
+                    lastUpdatedDate: row[7] ? formatDateToIST(row[7]) : "",
                     updates: parsedUpdates
                 });
             }
@@ -1038,12 +1124,30 @@ function getAdminData() {
 }
 
 function saveUser(userEmail, name, role, manager, emailEnabled) {
+    // === INPUT VALIDATION ===
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!userEmail || !emailRegex.test(userEmail)) {
+        throw new Error("Error: Invalid email format. Please provide a valid email address.");
+    }
+    
+    if (!name || typeof name !== 'string' || name.trim() === "") {
+        throw new Error("Error: User name is required and cannot be empty.");
+    }
+    
+    const validRoles = ["None", "Manager", "Admin", "Action Owner"];
+    if (!role || !validRoles.includes(role)) {
+        throw new Error("Error: Role must be one of: None, Manager, Admin, Action Owner.");
+    }
+    
     const email = Session.getActiveUser().getEmail();
     if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.USERS);
-    const data = sheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 5).getValues() : [[]];
 
     // Update if exists
     for (let i = 1; i < data.length; i++) {
@@ -1067,7 +1171,9 @@ function deleteUser(userEmail) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.USERS);
-    const data = sheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 5).getValues() : [[]];
 
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === userEmail) {
@@ -1084,8 +1190,9 @@ function saveSetting(key, value) {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
 
-    // Avoid exact duplicates
-    const data = sheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 2).getValues() : [[]];    // Avoid exact duplicates
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === key && data[i][1] === value) {
             return "Setting already exists";
@@ -1102,7 +1209,9 @@ function deleteSetting(key, value) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
-    const data = sheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 2).getValues() : [[]];
 
     for (let i = data.length - 1; i > 0; i--) { // Reverse loop for safe deletion
         if (data[i][0] === key && data[i][1] === value) {
@@ -1118,6 +1227,28 @@ function generateId(prefix) {
 }
 
 function createProject(name, startDate, deadline, status, phase, projType, outcomes = "", risks = "") {
+    // === INPUT VALIDATION ===
+    if (!name || typeof name !== 'string' || name.trim() === "") {
+        throw new Error("Error: Project name is required and cannot be empty.");
+    }
+    
+    if (!startDate || !/^\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(startDate.toString())) {
+        throw new Error("Error: Valid start date is required (format: MM/DD/YYYY or YYYY-MM-DD).");
+    }
+    
+    if (deadline && !/^\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(deadline.toString())) {
+        throw new Error("Error: Deadline must be in valid date format (MM/DD/YYYY or YYYY-MM-DD).");
+    }
+    
+    // Validate date order: start should be before or equal to deadline
+    if (startDate && deadline) {
+        const start = new Date(startDate);
+        const end = new Date(deadline);
+        if (start > end) {
+            throw new Error("Error: Start date must be before or equal to deadline.");
+        }
+    }
+    
     const email = Session.getActiveUser().getEmail();
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1156,6 +1287,24 @@ function createProject(name, startDate, deadline, status, phase, projType, outco
 }
 
 function createAction(projectId, desc, actionOwner, priority) {
+    // === INPUT VALIDATION ===
+    if (!projectId || typeof projectId !== 'string' || projectId.trim() === "") {
+        throw new Error("Error: Project ID is required.");
+    }
+    
+    if (!desc || typeof desc !== 'string' || desc.trim() === "") {
+        throw new Error("Error: Action description is required and cannot be empty.");
+    }
+    
+    if (desc.length > 1000) {
+        throw new Error("Error: Action description cannot exceed 1000 characters.");
+    }
+    
+    const validPriorities = ["Low", "Medium", "High", "Critical"];
+    if (!priority || !validPriorities.includes(priority)) {
+        throw new Error("Error: Priority must be one of: Low, Medium, High, Critical.");
+    }
+    
     const email = Session.getActiveUser().getEmail();
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1328,7 +1477,7 @@ function updateActionStatus(actionId, newStatus, pctComplete, updateNote) {
             id: actionId,
             status: newStatus,
             percentageCompleted: pctComplete,
-            lastUpdatedDate: new Date(timestamp).toLocaleString(),
+            lastUpdatedDate: formatDateToIST(timestamp),
             updates: updatedLog ? JSON.parse(updatedLog) : JSON.parse(actionData[actionRowIndex][8] || "[]")
         }
     };
@@ -1427,6 +1576,19 @@ function editActionUpdate(actionId, timestamp, newText) {
 }
 
 function addProjectComment(projectId, commentText) {
+    // === INPUT VALIDATION ===
+    if (!projectId || typeof projectId !== 'string' || projectId.trim() === "") {
+        throw new Error("Error: Project ID is required.");
+    }
+    
+    if (!commentText || typeof commentText !== 'string' || commentText.trim() === "") {
+        throw new Error("Error: Comment text cannot be empty.");
+    }
+    
+    if (commentText.length > 5000) {
+        throw new Error("Error: Comment cannot exceed 5000 characters. Current: " + commentText.length);
+    }
+    
     const email = Session.getActiveUser().getEmail();
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -1484,7 +1646,9 @@ function editProjectComment(projectId, timestamp, newText) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const data = sheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
 
     for (let i = 1; i < data.length; i++) {
         if (data[i][0] === projectId) {
@@ -1897,7 +2061,9 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
     
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const projectData = projectSheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = projectSheet.getLastRow();
+    const projectData = lastRow > 1 ? projectSheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
     
     // Find project
     let projectRowIndex = -1;
@@ -1944,7 +2110,9 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
     }
     
     if (newPercentage !== undefined && newPercentage !== null) {
-        const percentValue = parseInt(newPercentage) || 0;
+        let percentValue = parseInt(newPercentage) || 0;
+        // === VALIDATION: Ensure percentage is within 0-100 range ===
+        percentValue = Math.max(0, Math.min(100, percentValue));
         projectSheet.getRange(projectRowIndex + 1, 7).setValue(percentValue);
         changes.percentage = percentValue;
     }
@@ -2018,8 +2186,9 @@ function deleteProject(projectId) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const pSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const pData = pSheet.getDataRange().getValues();
-    let found = false;
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const pLastRow = pSheet.getLastRow();
+    const pData = pLastRow > 1 ? pSheet.getRange(1, 1, pLastRow, 16).getValues() : [[]];    let found = false;
 
     for (let i = 1; i < pData.length; i++) {
         if (pData[i][0] === projectId) {
@@ -2032,8 +2201,9 @@ function deleteProject(projectId) {
 
     // remove any actions tied to the deleted project
     const aSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
-    const aData = aSheet.getDataRange().getValues();
-    // iterate backwards when deleting rows
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const aLastRow = aSheet.getLastRow();
+    const aData = aLastRow > 1 ? aSheet.getRange(1, 1, aLastRow, 9).getValues() : [[]];    // iterate backwards when deleting rows
     for (let j = aData.length - 1; j > 0; j--) {
         if (aData[j][1] === projectId) {
             aSheet.deleteRow(j + 1);
@@ -2052,7 +2222,9 @@ function deleteAction(actionId) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const aSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
-    const aData = aSheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const aLastRow = aSheet.getLastRow();
+    const aData = aLastRow > 1 ? aSheet.getRange(1, 1, aLastRow, 9).getValues() : [[]];
 
     for (let i = 1; i < aData.length; i++) {
         if (aData[i][0] === actionId) {
@@ -2073,7 +2245,9 @@ function deleteProjectComment(projectId, timestamp) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const pSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    const pData = pSheet.getDataRange().getValues();
+    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    const lastRow = pSheet.getLastRow();
+    const pData = lastRow > 1 ? pSheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
 
     for (let i = 1; i < pData.length; i++) {
         if (pData[i][0] === projectId) {

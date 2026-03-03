@@ -1830,10 +1830,10 @@
                     historyBody.innerHTML = '<p class="text-muted">No update history yet.</p>';
                 } else {
                     let html = '<div class="list-group">';
-                    details.comments.forEach(c => {
+                    details.comments.forEach((c, idx) => {
                         const canEdit = appState.role === 'Admin' || c.user === appState.email;
                         html += `
-                            <div class="list-group-item">
+                            <div class="list-group-item" data-comment-idx="${idx}">
                                 <div class="d-flex w-100 justify-content-between">
                                     <h6 class="mb-1">${escapeHtml(c.user || 'System')}</h6>
                                     <small class="text-muted">${escapeHtml(c.timestamp || '')}</small>
@@ -1841,8 +1841,8 @@
                                 <p class="mb-1">${escapeHtml(c.text || '')}</p>
                                 ${canEdit ? `
                                     <div class="mt-2">
-                                        <button class="btn btn-sm btn-outline-primary" onclick="openEditNoteModal('${escapeHtml(projectId)}', '${escapeHtml(c.timestamp)}', \`${escapeHtml(c.text)}\`)">Edit</button>
-                                        <button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteNote('${escapeHtml(projectId)}', '${escapeHtml(c.timestamp)}')">Delete</button>
+                                        <button class="btn btn-sm btn-outline-primary btn-edit-note" data-project-id="${escapeHtml(projectId)}" data-timestamp="${escapeHtml(c.timestamp)}" data-text="${escapeHtml(c.text)}">Edit</button>
+                                        <button class="btn btn-sm btn-outline-danger ms-1 btn-delete-note" data-project-id="${escapeHtml(projectId)}" data-timestamp="${escapeHtml(c.timestamp)}">Delete</button>
                                     </div>
                                 ` : ''}
                             </div>
@@ -1850,6 +1850,24 @@
                     });
                     html += '</div>';
                     historyBody.innerHTML = html;
+                    
+                    // === SECURITY FIX: Use event listeners instead of inline onclick ===
+                    document.querySelectorAll('.btn-edit-note').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const projectId = this.getAttribute('data-project-id');
+                            const timestamp = this.getAttribute('data-timestamp');
+                            const text = this.getAttribute('data-text');
+                            openEditNoteModal(projectId, timestamp, text);
+                        });
+                    });
+                    
+                    document.querySelectorAll('.btn-delete-note').forEach(btn => {
+                        btn.addEventListener('click', function() {
+                            const projectId = this.getAttribute('data-project-id');
+                            const timestamp = this.getAttribute('data-timestamp');
+                            confirmDeleteNote(projectId, timestamp);
+                        });
+                    });
                 }
                 
                 historyModal.show();
