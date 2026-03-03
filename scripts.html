@@ -16,6 +16,53 @@
         currentProjectId: null  // Track which project is being viewed in detail modal
     };
 
+    function setGlobalLoading(isLoading, text = "Refreshing content...") {
+        const wrap = document.getElementById("globalLoading");
+        const label = document.getElementById("globalLoadingText");
+        if (!wrap) return;
+        if (label) label.textContent = text;
+        if (isLoading) {
+            wrap.classList.remove("d-none");
+            wrap.classList.add("d-flex");
+        } else {
+            wrap.classList.add("d-none");
+            wrap.classList.remove("d-flex");
+        }
+    }
+
+    function syncModalBackdrops() {
+        const openModals = Array.from(document.querySelectorAll('.modal.show'));
+
+        // hard reset all existing backdrops first
+        document.querySelectorAll('.modal-backdrop').forEach(bp => bp.remove());
+
+        if (openModals.length === 0) {
+            document.body.classList.remove('modal-open');
+            document.body.style.removeProperty('padding-right');
+            return;
+        }
+
+        // restore modal-open when at least one modal is active
+        document.body.classList.add('modal-open');
+
+        // identify top-most visible modal by z-index
+        let topModal = openModals[0];
+        let topZ = parseInt(window.getComputedStyle(topModal).zIndex, 10) || 1050;
+        openModals.forEach(m => {
+            const z = parseInt(window.getComputedStyle(m).zIndex, 10) || 1050;
+            if (z > topZ) {
+                topZ = z;
+                topModal = m;
+            }
+        });
+
+        // create one clean backdrop beneath the top-most modal
+        const newBackdrop = document.createElement('div');
+        newBackdrop.className = 'modal-backdrop fade show';
+        newBackdrop.style.setProperty('z-index', String(topZ - 1), 'important');
+        document.body.appendChild(newBackdrop);
+    }
+
     // Initialization
     document.addEventListener("DOMContentLoaded", () => {
         loadDashboard();
@@ -55,17 +102,49 @@
                 if (form) form.reset();
             });
         }
+
+        // ensure backdrop z-index is just below the opening modal (fix stacking for nested modals)
+        const modalIds = [
+            'projectDetailModal','projectModal','editProjectModal',
+            'actionModal','projectCommentModal','historyModal','updateActionModal'
+        ];
+        modalIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('show.bs.modal', () => {
+                    // small delay to let bootstrap create the backdrop element
+                    setTimeout(() => {
+                        const backdrop = document.querySelector('.modal-backdrop');
+                        if (backdrop) {
+                            const z = parseInt(window.getComputedStyle(el).zIndex, 10) || 1050;
+                            // use setProperty to add !important so it beats the base rule
+                            backdrop.style.setProperty('z-index', (z - 1), 'important');
+                        }
+                    }, 0);
+                });
+            }
+        });
+
+        // always reset backdrop stack whenever any modal closes
+        document.addEventListener('hidden.bs.modal', () => {
+            setTimeout(() => {
+                syncModalBackdrops();
+            }, 0);
+        });
     });
 
     // --- API Calls ---
-    function loadDashboard() {
+    // loadDashboard optionally accepts a callback that's executed after the state is updated
+    function loadDashboard(callback) {
         console.log("1. Starting loadDashboard()...");
+        setGlobalLoading(true, "Refreshing dashboard...");
         google.script.run
             .withSuccessHandler(data => {
                 console.log("2. SuccessHandler: Data received! Size:", data ? Object.keys(data).length : 0);
                 
                 if (!data) {
                     showAlert("No data returned from server", "danger");
+                    setGlobalLoading(false);
                     return;
                 }
                 
@@ -94,13 +173,18 @@
                 applyRBAC();
 
                 console.log("7. Dashboard load successfully finished.");
+                if (callback && typeof callback === 'function') {
+                    callback();
+                }
+                setGlobalLoading(false);
             })
             .withFailureHandler(err => {
                 console.error("Dashboard load failed:", err);
                 document.getElementById("projectsGrid").innerHTML = `<div class='col-12 text-center text-danger py-5'>Failed to load data. Please refresh.</div>`;
                 showAlert("Error loading dashboard: " + err.message, "danger");
+                setGlobalLoading(false);
             })
-            .getDashboardData();
+                .getDashboardData();
     }
 
     // --- Renderers ---
@@ -673,11 +757,11 @@
                 <b>${escapeHtml(a.desc)}</b> <span class="${badgeStyle} ms-1">${a.status}</span> <br>
                 <span class="text-muted">Owner: ${escapeHtml(a.owner)} • ${a.percentageCompleted}% Complete</span>
              </div>
-             <div>
-                <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})">Update</button>
-                <button class="btn btn-sm btn-light border" onclick='openHistoryModal(${JSON.stringify(a.updates)})'>Logs</button>
-                ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteAction('${escapeHtml(a.id)}')">Delete</button>` : ''}
-             </div>
+                 <div class="action-controls d-flex gap-1">
+                     <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})">Update</button>
+                     <button class="btn btn-sm btn-light border" onclick='openHistoryModal(${JSON.stringify(a.updates)})'>Logs</button>
+                     ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteAction('${escapeHtml(a.id)}')">Delete</button>` : ''}
+                 </div>
           </li>
         `;
         });
@@ -789,6 +873,7 @@
 
         btn.disabled = true;
         btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+        setGlobalLoading(true, "Creating project...");
 
         const outcomes = document.getElementById("pOutcomes").value;
         const risks = document.getElementById("pRisks").value;
@@ -808,6 +893,7 @@
                 showAlert(err.message, "danger");
                 btn.disabled = false;
                 btn.innerHTML = "Create Project";
+                setGlobalLoading(false);
             })
             .createProject(name, pStart, deadline, status, phase, pType, outcomes, risks);
     }
@@ -832,6 +918,7 @@
 
         btn.disabled = true;
         btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Assigning...`;
+        setGlobalLoading(true, "Assigning action...");
 
         const priority = document.getElementById("aPriority").value;
 
@@ -849,6 +936,7 @@
                 showAlert(err.message, "danger");
                 btn.disabled = false;
                 btn.innerHTML = "Assign Action";
+                setGlobalLoading(false);
             })
             // pass empty assignee; server will assign the project's owner
             .createAction(projId, desc, "", priority);
@@ -877,6 +965,7 @@
         const btn = document.getElementById("btnSaveUpdate");
         btn.disabled = true;
         btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+        setGlobalLoading(true, "Updating action...");
 
         const actionId = document.getElementById("uActionId").value;
         const newStatus = document.getElementById("uStatus").value;
@@ -896,6 +985,7 @@
                 showAlert(err.message, "danger");
                 btn.disabled = false;
                 btn.innerHTML = "Save Update";
+                setGlobalLoading(false);
             })
             .updateActionStatus(actionId, newStatus, pct, note);
     }
@@ -951,6 +1041,7 @@
         const btn = document.getElementById("btnSaveProjectEdit");
         btn.disabled = true;
         btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+        setGlobalLoading(true, "Updating project...");
 
         const projectId = document.getElementById("editProjectId").value;
         let type = null;
@@ -993,6 +1084,7 @@
                 showAlert("Error: " + err.message, "danger");
                 btn.disabled = false;
                 btn.innerHTML = "Save Changes";
+                setGlobalLoading(false);
             })
             .updateProject(projectId, status, phase, percentage, note, startDate, deadline, type);
     }
@@ -1002,6 +1094,7 @@
         const btn = document.getElementById("btnSaveComment");
         btn.disabled = true;
         btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Saving...`;
+        setGlobalLoading(true, "Saving note...");
 
         const pId = document.getElementById("cProjectId").value;
         const text = document.getElementById("cText").value;
@@ -1019,6 +1112,7 @@
                 showAlert(err.message, "danger");
                 btn.disabled = false;
                 btn.innerHTML = "Add Comment";
+                setGlobalLoading(false);
             })
             .addProjectComment(pId, text);
     }
@@ -1120,19 +1214,58 @@
         new bootstrap.Modal(modal).show();
     }
 
+    // rebuild the history/notes panel when the modal is already visible
+    function refreshHistoryContent(projectId) {
+        const project = appState.projects.find(p => p.id === projectId);
+        if (!project) return;
+        const container = document.getElementById("historyTimeline");
+        if (!container) return;
+        container.innerHTML = "";
+        const historyArray = project.updates || [];
+        if (historyArray.length === 0) {
+            container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
+        } else {
+            [...historyArray].reverse().forEach(log => {
+                const date = new Date(log.timestamp).toLocaleString();
+                const statusBadge = log.status ? `<span class="badge bg-secondary ms-1">${log.status}</span>` : "";
+                container.innerHTML += `
+                  <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
+                    <div class="card-body py-2">
+                       <div class="d-flex justify-content-between align-items-center mb-1">
+                          <small class="fw-bold text-dark">${log.user}</small>
+                          <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                          ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                       </div>
+                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                    </div>
+                  </div>
+                `;
+            });
+        }
+        // update title if present
+        const modal = document.getElementById("historyModal");
+        if (modal) {
+            const titleEl = modal.querySelector(".modal-title");
+            if (titleEl) titleEl.textContent = `${project.name} - Notes & History`;
+        }
+    }
+
     function toggleMetrics() {
         const metricsDiv = document.getElementById("rollupMetrics");
         const btn = document.getElementById("metricsToggleBtn");
         const icon = document.getElementById("metricsToggleIcon");
-        
+        // update icon and label text
+        const label = btn.querySelector('.btn-label');
         if (metricsDiv.classList.contains("collapsed")) {
+            // expand
             metricsDiv.classList.remove("collapsed");
-            btn.textContent = "▼ Collapse";
-            btn.insertBefore(icon, btn.firstChild);
+            icon.textContent = "▼";
+            if (label) label.textContent = " Collapse";
         } else {
+            // collapse
             metricsDiv.classList.add("collapsed");
-            btn.textContent = "▶ Expand";
-            btn.insertBefore(icon, btn.firstChild);
+            icon.textContent = "▶";
+            if (label) label.textContent = " Expand";
         }
     }
 
@@ -1149,6 +1282,7 @@
     function confirmDeleteProject() {
         if (!confirm("Are you sure you want to permanently delete this project and all its actions?")) return;
         const pid = appState.currentProjectId;
+        setGlobalLoading(true, "Deleting project...");
         google.script.run
             .withSuccessHandler(res => {
                 showAlert(res, "success");
@@ -1157,27 +1291,42 @@
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('projectDetailModal')).hide();
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('editProjectModal')).hide();
             })
-            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                setGlobalLoading(false);
+            })
             .deleteProject(pid);
     }
 
     function confirmDeleteAction(actionId) {
         if (!confirm("Delete this action? It cannot be recovered.")) return;
+        setGlobalLoading(true, "Deleting action...");
         google.script.run
             .withSuccessHandler(res => { 
                 showAlert(res, "success"); 
                 loadDashboard(); 
                 bootstrap.Modal.getOrCreateInstance(document.getElementById('projectDetailModal')).hide();
             })
-            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                setGlobalLoading(false);
+            })
             .deleteAction(actionId);
     }
 
     function confirmDeleteNote(projectId, timestamp) {
         if (!confirm("Remove this note from the project history?")) return;
+        setGlobalLoading(true, "Deleting note...");
         google.script.run
-            .withSuccessHandler(res => { showAlert(res, "success"); loadDashboard(); openProjectNotesModal(projectId); })
-            .withFailureHandler(err => showAlert(err.message, "danger"))
+            .withSuccessHandler(res => {
+                showAlert(res, "success");
+                // reload state then update the history panel
+                loadDashboard(() => refreshHistoryContent(projectId));
+            })
+            .withFailureHandler(err => {
+                showAlert(err.message, "danger");
+                setGlobalLoading(false);
+            })
             .deleteProjectComment(projectId, timestamp);
     }
 

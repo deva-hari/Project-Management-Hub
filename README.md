@@ -184,6 +184,8 @@ Holds key/value pairs used to populate dropdowns for project types, statuses, an
 
 **Note:** When you open the web app the first time after deployment, you'll be able to create new projects using the modal. The form now includes a **Project Name** field and a **Project Type** dropdown (driven by the Settings sheet). Likewise, the **Edit Project** dialog exposes the project type so it can be adjusted later. If you run `initializeDatabase()` this form will be pre‑populated with default project types, statuses and phases.
 
+The dashboard metrics panel is collapsed by default and uses a much lighter color scheme so it stays non‑intrusive; use the toggle button to expand it when you need an overview.
+
 ### Step 3: Deploy as a Web App
 
 1. **Create a deployment**:

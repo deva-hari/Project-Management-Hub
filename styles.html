@@ -245,6 +245,10 @@
     /* add some glow under key metric cards */
     #rollupMetrics .card {
         position: relative;
+        /* make background lighter so metrics are less intrusive */
+        background-color: rgba(255,255,255,0.8) !important;
+        background-image: none !important;
+        color: #1f2937 !important;
     }
     #rollupMetrics .card::after {
         content: '';
@@ -256,9 +260,41 @@
         pointer-events: none;
     }
 
+    /* dim large emoji/icons inside metric cards */
+    #rollupMetrics .card .fs-1 {
+        opacity: 0.4;
+    }
+
+    /* ensure text stays readable in faded metrics cards */
+    #rollupMetrics .card.text-white,
+    #rollupMetrics .card.text-dark,
+    #rollupMetrics .card .text-white,
+    #rollupMetrics .card .text-white-50,
+    #rollupMetrics .card .text-black-50,
+    #rollupMetrics .card h2,
+    #rollupMetrics .card h6,
+    #rollupMetrics .card .fw-bold,
+    #rollupMetrics .card small,
+    #rollupMetrics .card span {
+        color: #1f2937 !important;
+    }
+
+    #rollupMetrics .card .text-white-50,
+    #rollupMetrics .card .text-black-50,
+    #rollupMetrics .card small.text-muted {
+        color: rgba(31, 41, 55, 0.72) !important;
+    }
+
     /* subtle hover animations for buttons */
     .btn:hover {
         transform: translateY(-1px) scale(1.02);
+    }
+
+    /* fixed-width container for action buttons in project details to avoid layout shift */
+    .action-controls {
+        flex-shrink: 0;
+        min-width: 160px;
+        justify-content: flex-end;
     }
 
     /* misc improvements for techy look */
@@ -288,9 +324,7 @@
         background: rgba(0,0,0,0.05);
     }
 
-    #rollupMetrics.collapsed ~ #metricsToggleBtn #metricsToggleIcon {
-        transform: rotate(-180deg);
-    }
+    /* the toggle icon rotation is handled in script; no static rule required */
 
     .modal-header {
         border-bottom: none;
@@ -384,6 +418,15 @@
         font-weight: 600;
         color: #495057;
         margin-bottom: 0.5rem;
+    }
+
+    /* global loading row is visible but subtle */
+    #globalLoading {
+        background: rgba(255,255,255,0.7);
+        border: 1px solid rgba(0,0,0,0.05);
+        border-radius: 8px;
+        padding: 0.4rem 0.7rem;
+        width: fit-content;
     }
 
     /* === ALERTS === */
