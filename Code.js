@@ -1470,6 +1470,18 @@ function updateActionStatus(actionId, newStatus, pctComplete, updateNote) {
         ]]);
     }
     
+    // Send notification email with changes if updated by someone other than owner
+    try {
+        const changes = {};
+        if (newStatus) changes.status = newStatus;
+        if (pctComplete !== undefined) changes.percentage = pctComplete;
+        if (updateNote) changes.note = updateNote;
+        sendActionUpdateNotification(actionId, actionRow[2], actionOwner, email, changes);
+    } catch (e) {
+        Logger.log("Error sending action update notification: " + e.toString());
+        // Don't fail the update if email fails
+    }
+    
     // Return updated action data for client-side cache update
     return {
         success: true,
@@ -1758,6 +1770,94 @@ Please do not reply to this email.
     }
 }
 
+function sendActionUpdateNotification(actionId, actionDesc, actionOwner, updatedBy, changes) {
+    // Validate inputs
+    if (!actionOwner) {
+        Logger.log('sendActionUpdateNotification: No action owner specified');
+        return;
+    }
+
+    // Only send email if updated by someone other than the action owner
+    if (updatedBy === actionOwner) {
+        Logger.log('sendActionUpdateNotification: No email sent - owner updated own action');
+        return;
+    }
+
+    const subject = `Task Updated: ${actionDesc}`;
+    
+    // Build change details HTML
+    let changesHTML = '';
+    if (changes.status) changesHTML += `<li><strong>Status:</strong> ${changes.status}</li>`;
+    if (changes.percentage !== undefined) changesHTML += `<li><strong>Completion:</strong> ${changes.percentage}%</li>`;
+    if (changes.note) changesHTML += `<li><strong>Update Note:</strong> ${changes.note}</li>`;
+
+    // Create HTML body
+    const htmlBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #0066cc;">Task Update Notification</h2>
+      
+      <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+        <p><strong>Task:</strong> ${actionDesc}</p>
+        <p><strong>Task ID:</strong> ${actionId}</p>
+        <p><strong>Updated By:</strong> ${updatedBy}</p>
+        <p><strong>Update Time:</strong> ${formatDateToIST(new Date())}</p>
+      </div>
+      
+      <div style="background-color: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 20px 0;">
+        <strong>Changes Made:</strong>
+        <ul style="margin: 10px 0; padding-left: 20px;">
+          ${changesHTML}
+        </ul>
+      </div>
+      
+      <p style="color: #666; font-size: 14px; margin-top: 30px;">
+        Please log in to the Project Management Hub to view all task details.
+      </p>
+      
+      <hr style="border: none; border-top: 1px solid #ddd; margin: 20px 0;">
+      
+      <p style="color: #999; font-size: 12px;">
+        This is an automated notification from the Project Management Hub. 
+        Please do not reply to this email.
+      </p>
+    </div>
+    `;
+
+    // Plain text fallback
+    const plainBody = `
+Task Update Notification
+
+Task: ${actionDesc}
+Task ID: ${actionId}
+Updated By: ${updatedBy}
+Update Time: ${formatDateToIST(new Date())}
+
+Changes Made:
+${Object.entries(changes).map(([key, val]) => `- ${key}: ${val}`).join('\n')}
+
+Please log in to the Project Management Hub to view all task details.
+
+---
+This is an automated notification from the Project Management Hub.
+Please do not reply to this email.
+    `;
+
+    try {
+        MailApp.sendEmail({
+            to: actionOwner,
+            subject: subject,
+            body: plainBody,
+            htmlBody: htmlBody,
+            name: 'Project Management Hub',
+            replyTo: 'no-reply@example.com'
+        });
+        Logger.log(`Sent action update notification to owner: ${actionOwner}`);
+    } catch (e) {
+        Logger.log('sendActionUpdateNotification: error: ' + (e && e.toString ? e.toString() : JSON.stringify(e)));
+        // Don't throw - we don't want email failures to block the update
+    }
+}
+
 function sendProjectNoteNotification(projectId, projectName, projectOwner, noteAuthor, noteText) {
     // Validate inputs
     if (!projectOwner || !noteAuthor) {
@@ -1838,8 +1938,14 @@ function sendProjectNoteNotification(projectId, projectName, projectOwner, noteA
 
 function sendProjectUpdateNotification(projectId, projectName, projectOwner, projectManager, updatedBy, changes) {
     // Validate inputs
-    if (!projectOwner && !projectManager) {
-        Logger.log('sendProjectUpdateNotification: No valid recipients');
+    if (!projectOwner) {
+        Logger.log('sendProjectUpdateNotification: No project owner specified');
+        return;
+    }
+
+    // Only send email if updated by someone other than the project owner
+    if (updatedBy === projectOwner) {
+        Logger.log('sendProjectUpdateNotification: No email sent - owner updated own project');
         return;
     }
 
@@ -1907,31 +2013,16 @@ Please do not reply to this email.
     `;
 
     try {
-        // Send to project owner if available
-        if (projectOwner) {
-            MailApp.sendEmail({
-                to: projectOwner,
-                subject: subject,
-                body: plainBody,
-                htmlBody: htmlBody,
-                name: 'Project Management Hub',
-                replyTo: 'no-reply@example.com'
-            });
-            Logger.log(`Sent project update notification to owner: ${projectOwner}`);
-        }
-        
-        // Send to project manager if different from owner
-        if (projectManager && projectManager !== projectOwner) {
-            MailApp.sendEmail({
-                to: projectManager,
-                subject: subject,
-                body: plainBody,
-                htmlBody: htmlBody,
-                name: 'Project Management Hub',
-                replyTo: 'no-reply@example.com'
-            });
-            Logger.log(`Sent project update notification to manager: ${projectManager}`);
-        }
+        // Send to project owner only
+        MailApp.sendEmail({
+            to: projectOwner,
+            subject: subject,
+            body: plainBody,
+            htmlBody: htmlBody,
+            name: 'Project Management Hub',
+            replyTo: 'no-reply@example.com'
+        });
+        Logger.log(`Sent project update notification to owner: ${projectOwner}`);
     } catch (e) {
         Logger.log('sendProjectUpdateNotification: error: ' + (e && e.toString ? e.toString() : JSON.stringify(e)));
         // Don't throw - we don't want email failures to block the update
