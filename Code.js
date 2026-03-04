@@ -174,6 +174,33 @@ function createRequestCache() {
 }
 
 /**
+ * PERFORMANCE: Cache sheet row counts to avoid repeated getLastRow() calls
+ * Call this once at the start of a function, then reuse the counts
+ */
+function getSheetRowCounts(ss) {
+    return {
+        projects: ss.getSheetByName(SHEET_NAMES.PROJECTS).getLastRow(),
+        actions: ss.getSheetByName(SHEET_NAMES.ACTIONS).getLastRow(),
+        users: ss.getSheetByName(SHEET_NAMES.USERS).getLastRow(),
+        settings: ss.getSheetByName(SHEET_NAMES.SETTINGS).getLastRow()
+    };
+}
+
+/**
+ * PERFORMANCE: Build ID-to-row-index map for O(1) lookup instead of O(n) search
+ * Usage: const idMap = buildIdToIndexMap(projectsData); const rowIndex = idMap[projectId];
+ */
+function buildIdToIndexMap(dataArray) {
+    const map = {};
+    for (let i = 0; i < dataArray.length; i++) {
+        if (dataArray[i][0]) { // Column A = ID
+            map[dataArray[i][0]] = i;
+        }
+    }
+    return map;
+}
+
+/**
  * Get or compute value in cache
  */
 function getFromCache(cache, key, computeFn) {
@@ -1908,19 +1935,19 @@ function createAction(projectId, desc, actionOwner, priority) {
 
     // Determine the actual assignee: the owner of the linked project
     const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    // === PERFORMANCE: Use bounded query ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const projLastRow = projectSheet.getLastRow();
     const projData = projLastRow > 1 ? projectSheet.getRange(1, 1, projLastRow, 16).getValues() : [[]];
-    let projectOwner = null;
-    for (let i = 1; i < projData.length; i++) {
-        if (projData[i][0] === projectId) {
-            projectOwner = projData[i][2];
-            break;
-        }
-    }
-    if (!projectOwner) {
+    
+    // Build ID-to-index map for fast lookup
+    const projectIdMap = buildIdToIndexMap(projData);
+    const projectIndex = projectIdMap[projectId];
+    
+    if (projectIndex === undefined || !projData[projectIndex] || !projData[projectIndex][2]) {
         throw new Error("Project not found or has no owner: " + projectId);
     }
+    
+    const projectOwner = projData[projectIndex][2];
 
     actionOwner = projectOwner; // override any passed value
 
@@ -2199,14 +2226,25 @@ function addProjectComment(projectId, commentText) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    // === PERFORMANCE: Use bounded query ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const lastRow = sheet.getLastRow();
     const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
-
-    for (let i = 1; i < data.length; i++) {
-        if (data[i][0] === projectId) {
-            const projectName = data[i][1]; // Column B (index 1) = Name
-            const projectOwner = data[i][2]; // Column C (index 2) = OwnerEmail
+    
+    // Build ID-to-index map for fast lookup
+    const projectIdMap = buildIdToIndexMap(data);
+    const rowIndex = projectIdMap[projectId];
+    
+    if (rowIndex === undefined) {
+        throw new Error("Project ID not found.");
+    }
+    
+    const row = data[rowIndex];
+    const projectName = row[1]; // Column B (index 1) = Name
+    const projectOwner = row[2]; // Column C (index 2) = OwnerEmail
+    
+    // Using rowIndex directly instead of loop variable i
+    {
+        const i = rowIndex;
 
             const timestamp = new Date().toISOString();
             // FIXED: Column 14 (1-based) = index [13] (0-based) = LastUpdated
@@ -2241,9 +2279,7 @@ function addProjectComment(projectId, commentText) {
             }
             
             return "Comment added to project!";
-        }
     }
-    throw new Error("Project ID not found.");
 }
 
 function editProjectComment(projectId, timestamp, newText) {
@@ -2252,18 +2288,29 @@ function editProjectComment(projectId, timestamp, newText) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const lastRow = sheet.getLastRow();
     const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
-
-    for (let i = 1; i < data.length; i++) {
-        if (data[i][0] === projectId) {
-            let currentLog;
-            try {
-                currentLog = JSON.parse(data[i][14] || "[]");
-            } catch (e) {
-                currentLog = [];
-            }
+    
+    // Build ID-to-index map for fast lookup
+    const projectIdMap = buildIdToIndexMap(data);
+    const rowIndex = projectIdMap[projectId];
+    
+    if (rowIndex === undefined) {
+        throw new Error("Project ID not found.");
+    }
+    
+    const row = data[rowIndex];
+    let currentLog;
+    try {
+        currentLog = JSON.parse(row[14] || "[]");
+    } catch (e) {
+        currentLog = [];
+    }
+    
+    // Using rowIndex directly
+    {
+        const i = rowIndex;
 
             // Find the note by timestamp
             const noteIndex = currentLog.findIndex(note => note.timestamp === timestamp);
@@ -2289,9 +2336,7 @@ function editProjectComment(projectId, timestamp, newText) {
             sheet.getRange(i + 1, 14).setValue(updateTimestamp);
 
             return "Note updated successfully!";
-        }
     }
-    throw new Error("Project ID not found.");
 }
 
 // --- NOTIFICATIONS ---
@@ -2627,20 +2672,30 @@ Please do not reply to this email.
 // Automatically triggers (e.g., Daily at 5 PM)
 function sendDailySummaryEmails() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
-    const uData = ss.getSheetByName(SHEET_NAMES.USERS).getDataRange().getValues();
-    uData.shift(); // Remove header
-
-    // Find all users who opted in
+    
+    // === PERFORMANCE: Use bounded queries instead of getDataRange() ===
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    
+    const uLastRow = usersSheet.getLastRow();
+    const pLastRow = projectsSheet.getLastRow();
+    const aLastRow = actionsSheet.getLastRow();
+    
+    const uData = uLastRow > 1 ? usersSheet.getRange(2, 1, uLastRow - 1, 6).getValues() : [];
+    
+    // Find all users who opted in (column 5 = EmailNotifications)
     const optedInUsers = uData.filter(r => r[4] === true || String(r[4]).toLowerCase() === "true");
     if (optedInUsers.length === 0) return;
 
     // Load full dataset once to save time
-    const pData = ss.getSheetByName(SHEET_NAMES.PROJECTS).getDataRange().getValues();
-    pData.shift();
+    const pData = pLastRow > 1 ? projectsSheet.getRange(2, 1, pLastRow - 1, 16).getValues() : [];
     const headersP = ["ProjectID", "Name", "OwnerEmail", "ManagerEmail", "Status", "Phase", "PercentageCompleted", "StartDate", "Deadline", "BusinessOutcomes", "KeyRisks", "LastUpdatedText", "CreatedAt", "LastUpdated", "Comments", "ProjectType"];
 
-    const aData = ss.getSheetByName(SHEET_NAMES.ACTIONS).getDataRange().getValues();
-    aData.shift();
+    const aData = aLastRow > 1 ? actionsSheet.getRange(2, 1, aLastRow - 1, 9).getValues() : [];
+    
+    // === PERFORMANCE: Queue emails for batch sending instead of one-by-one ===
+    const emailQueue = [];
 
     optedInUsers.forEach(u => {
         const userEmail = u[0];
@@ -2685,6 +2740,7 @@ function sendDailySummaryEmails() {
         // Compile Email
         if (activeProjectsHTML === "" && activeActionsHTML === "") return; // Skip if nothing to report
 
+        // === PERFORMANCE: Queue email instead of sending immediately ===
         const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
         <h2 style="color: #0066cc; border-bottom: 2px solid #0066cc; padding-bottom: 10px;">Daily Project Hub Summary</h2>
@@ -2724,19 +2780,37 @@ function sendDailySummaryEmails() {
       </div>
     `;
 
-        try {
-            MailApp.sendEmail({
-                to: userEmail,
-                subject: "Project Hub: Daily Wrap-Up",
-                htmlBody: emailHtml,
-                name: 'Project Management Hub',     // sender display name
-                replyTo: 'no-reply@example.com'
-                // use `from` here if you have a verified alias: from: 'alias@yourdomain.com'
-            });
-        } catch (e) {
-            console.error(`Failed to send digest to ${userEmail}: ` + e.message);
-        }
+        // Add to queue instead of sending immediately
+        emailQueue.push({
+            to: userEmail,
+            subject: "Project Hub: Daily Wrap-Up",
+            htmlBody: emailHtml,
+            name: 'Project Management Hub',
+            replyTo: 'no-reply@example.com'
+        });
     });
+    
+    // === PERFORMANCE: Send emails in batches to avoid timeout ===
+    // Send in batches of 10 with small delays between batches
+    const batchSize = 10;
+    for (let i = 0; i < emailQueue.length; i += batchSize) {
+        const batch = emailQueue.slice(i, Math.min(i + batchSize, emailQueue.length));
+        
+        batch.forEach(emailConfig => {
+            try {
+                MailApp.sendEmail(emailConfig);
+            } catch (e) {
+                Logger.log(`Failed to send digest to ${emailConfig.to}: ` + e.message);
+            }
+        });
+        
+        // Add small delay between batches to avoid rate limiting
+        if (i + batchSize < emailQueue.length) {
+            Utilities.sleep(200); // 200ms delay between batches
+        }
+    }
+    
+    Logger.log(`Sent ${emailQueue.length} daily summary emails in ${Math.ceil(emailQueue.length / batchSize)} batches`);
 }
 
 // --- UPDATE PROJECT ---
@@ -2746,20 +2820,15 @@ function updateProject(projectId, newStatus, newPhase, newPercentage, updateNote
     
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const projectSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const lastRow = projectSheet.getLastRow();
     const projectData = lastRow > 1 ? projectSheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
     
-    // Find project
-    let projectRowIndex = -1;
-    for (let i = 1; i < projectData.length; i++) {
-        if (projectData[i][0] === projectId) {
-            projectRowIndex = i;
-            break;
-        }
-    }
+    // Build ID-to-index map for fast lookup
+    const projectIdMap = buildIdToIndexMap(projectData);
+    const projectRowIndex = projectIdMap[projectId];
     
-    if (projectRowIndex === -1) {
+    if (projectRowIndex === undefined) {
         throw new Error("Project not found");
     }
     
@@ -2871,18 +2940,20 @@ function deleteProject(projectId) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const pSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const pLastRow = pSheet.getLastRow();
-    const pData = pLastRow > 1 ? pSheet.getRange(1, 1, pLastRow, 16).getValues() : [[]];    let found = false;
-
-    for (let i = 1; i < pData.length; i++) {
-        if (pData[i][0] === projectId) {
-            pSheet.deleteRow(i + 1);
-            found = true;
-            break;
-        }
+    const pData = pLastRow > 1 ? pSheet.getRange(1, 1, pLastRow, 16).getValues() : [[]];
+    
+    // Build ID-to-index map for fast lookup
+    const projectIdMap = buildIdToIndexMap(pData);
+    const projectRowIndex = projectIdMap[projectId];
+    
+    if (projectRowIndex === undefined) {
+        throw new Error("Project not found: " + projectId);
     }
-    if (!found) throw new Error("Project not found: " + projectId);
+    
+    // Delete the project row (rowIndex is 0-based, sheet rows are 1-based)
+    pSheet.deleteRow(projectRowIndex + 1);
 
     // remove any actions tied to the deleted project
     const aSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
@@ -2907,17 +2978,21 @@ function deleteAction(actionId) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const aSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
-    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const aLastRow = aSheet.getLastRow();
     const aData = aLastRow > 1 ? aSheet.getRange(1, 1, aLastRow, 9).getValues() : [[]];
-
-    for (let i = 1; i < aData.length; i++) {
-        if (aData[i][0] === actionId) {
-            aSheet.deleteRow(i + 1);
-            return "Action deleted";
-        }
+    
+    // Build ID-to-index map for fast lookup
+    const actionIdMap = buildIdToIndexMap(aData);
+    const actionRowIndex = actionIdMap[actionId];
+    
+    if (actionRowIndex === undefined) {
+        throw new Error("Action not found: " + actionId);
     }
-    throw new Error("Action not found: " + actionId);
+    
+    // Delete the action row (rowIndex is 0-based, sheet rows are 1-based)
+    aSheet.deleteRow(actionRowIndex + 1);
+    return "Action deleted";
 }
 
 /**
@@ -2930,25 +3005,29 @@ function deleteProjectComment(projectId, timestamp) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const pSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
-    // === PERFORMANCE: Use bounded query instead of getDataRange() ===
+    // === PERFORMANCE: Use bounded query and ID map for O(1) lookup ===
     const lastRow = pSheet.getLastRow();
     const pData = lastRow > 1 ? pSheet.getRange(1, 1, lastRow, 16).getValues() : [[]];
-
-    for (let i = 1; i < pData.length; i++) {
-        if (pData[i][0] === projectId) {
-            let comments = [];
-            try {
-                comments = JSON.parse(pData[i][14] || "[]");
-            } catch (e) {
-                comments = [];
-            }
-
-            const filtered = comments.filter(c => c.timestamp !== timestamp);
-            pSheet.getRange(i + 1, 15).setValue(JSON.stringify(filtered));
-
-            return "Comment removed";
-        }
+    
+    // Build ID-to-index map for fast lookup
+    const projectIdMap = buildIdToIndexMap(pData);
+    const projectRowIndex = projectIdMap[projectId];
+    
+    if (projectRowIndex === undefined) {
+        throw new Error("Project not found: " + projectId);
     }
-    throw new Error("Project not found: " + projectId);
+    
+    const row = pData[projectRowIndex];
+    let comments = [];
+    try {
+        comments = JSON.parse(row[14] || "[]");
+    } catch (e) {
+        comments = [];
+    }
+    
+    const filtered = comments.filter(c => c.timestamp !== timestamp);
+    pSheet.getRange(projectRowIndex + 1, 15).setValue(JSON.stringify(filtered));
+    
+    return "Comment removed";
 }
 
