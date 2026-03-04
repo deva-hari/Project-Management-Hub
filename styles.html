@@ -128,35 +128,72 @@
     #projectDetailModal {
         z-index: 1050 !important;
     }
+    
+    #projectDetailModal ~ .modal-backdrop {
+        z-index: 1049 !important;
+    }
 
     /* New/Edit Project Modal */
     #projectModal {
         z-index: 1055 !important;
+    }
+    
+    #projectModal ~ .modal-backdrop {
+        z-index: 1054 !important;
     }
 
     /* Edit Project Modal */
     #editProjectModal {
         z-index: 1055 !important;
     }
+    
+    #editProjectModal ~ .modal-backdrop {
+        z-index: 1054 !important;
+    }
 
     /* New Action Modal */
     #actionModal {
         z-index: 1055 !important;
     }
-
-    /* Project Comment Modal */
-    #projectCommentModal {
-        z-index: 1062 !important;
+    
+    #actionModal ~ .modal-backdrop {
+        z-index: 1054 !important;
     }
 
     /* History Modal */
     #historyModal {
         z-index: 1060 !important;
     }
+    
+    #historyModal ~ .modal-backdrop {
+        z-index: 1059 !important;
+    }
 
-    /* Update Action Modal (highest) */
+    /* Project Comment Modal */
+    #projectCommentModal {
+        z-index: 1062 !important;
+    }
+    
+    #projectCommentModal ~ .modal-backdrop {
+        z-index: 1061 !important;
+    }
+
+    /* Update Action Modal (highest - above all other modals) */
     #updateActionModal {
-        z-index: 1065 !important;
+        z-index: 1070 !important;
+    }
+    
+    #updateActionModal ~ .modal-backdrop {
+        z-index: 1069 !important;
+    }
+
+    /* Global notification modal should always be above all modals and have no backdrop */
+    #notificationModal {
+        z-index: 2000 !important;
+    }
+
+    #notificationModal .modal-content {
+        border-left: 6px solid #0d6efd;
     }
 
     /* All modals must be clickable and centered vertically */
@@ -165,6 +202,14 @@
         display: flex;
         align-items: center;
         min-height: calc(100% - 1rem); /* give a little breathing room top/bottom */
+    }
+    
+    /* Extra small button size for compact action buttons */
+    .btn-xs {
+        padding: 0.2rem 0.4rem;
+        font-size: 0.75rem;
+        line-height: 1.2;
+        border-radius: 0.2rem;
     }
 
     .modal-content {
@@ -179,6 +224,31 @@
 
     .modal-header, .modal-body, .modal-footer {
         pointer-events: auto !important;
+    }
+
+    /* === GLOBAL LOADING RGB BLINK === */
+    #globalLoading .spinner-border,
+    #globalLoadingText {
+        animation: rgbBlink 1.2s infinite linear;
+    }
+
+    @keyframes rgbBlink {
+        0% {
+            color: #dc3545;
+            border-color: currentColor;
+        }
+        33% {
+            color: #0d6efd;
+            border-color: currentColor;
+        }
+        66% {
+            color: #198754;
+            border-color: currentColor;
+        }
+        100% {
+            color: #dc3545;
+            border-color: currentColor;
+        }
     }
 
     /* Button and form elements must be clickable */
@@ -198,6 +268,16 @@
         max-height: 0;
         opacity: 0;
         margin-bottom: 0 !important;
+        padding: 0 !important;
+        overflow: hidden;
+        transition: all 0.3s ease-out;
+    }
+    
+    #rollupMetrics {
+        max-height: 2000px;
+        opacity: 1;
+        padding: 1rem;
+        transition: all 0.3s ease-in;
     }
 
     #metricsToggleIcon {
@@ -234,6 +314,7 @@
         background: rgba(255,255,255,0.6);
         padding: 2rem !important;
         border-radius: 16px;
+        max-width: 95% !important;
     }
 
     /* timeline cards look techy */
@@ -605,5 +686,73 @@
 
     ::-webkit-scrollbar-thumb:hover {
         background: #555;
+    }
+    
+    /* === LIST VIEW STYLES === */
+    .project-list {
+        width: 100%;
+    }
+    
+    .list-row {
+        background: white;
+        transition: all 0.2s ease;
+    }
+    
+    .list-row:last-child {
+        border-bottom: none !important;
+    }
+    
+    .list-row-header {
+        transition: background-color 0.2s ease;
+    }
+    
+    .list-row-header:hover {
+        background-color: #f8f9fa !important;
+    }
+    
+    .cursor-pointer {
+        cursor: pointer;
+    }
+    
+    .expand-icon {
+        display: inline-block;
+        width: 20px;
+        text-align: center;
+        user-select: none;
+        color: #0d6efd;
+    }
+    
+    .list-row-content {
+        transition: all 0.3s ease;
+        max-height: 0;
+        overflow: hidden;
+    }
+    
+    .list-row-content.show {
+        max-height: 2000px;
+        overflow: visible;
+    }
+    
+    /* View toggle buttons */
+    .btn-group .btn.active {
+        background: var(--primary-gradient);
+        border-color: #0d6efd;
+        color: white;
+    }
+    
+    /* Filter collapse animation */
+    #advancedFiltersBody {
+        transition: all 0.3s ease;
+    }
+    
+    /* List view responsive styles */
+    @media (max-width: 768px) {
+        .list-row-header .row {
+            flex-direction: column;
+        }
+        
+        .list-row-header .col-auto {
+            margin-bottom: 0.5rem;
+        }
     }
 </style>

@@ -46,6 +46,31 @@ const USER_ROLES = {
     ACTION_OWNER: "Action Owner"
 };
 
+// --- STATUS GROUPING MAPPING ---
+// Maps raw project statuses to UI display groups for better UX
+const STATUS_GROUPS = {
+    ONGOING: "Ongoing",
+    ON_HOLD: "On Hold",
+    COMPLETED: "Completed & Closure",
+    CANCELLED: "Cancelled"
+};
+
+// Maps individual statuses to their display groups
+const STATUS_TO_GROUP = {
+    "Not Started": STATUS_GROUPS.ONGOING,
+    "In Progress": STATUS_GROUPS.ONGOING,
+    "Pending": STATUS_GROUPS.ONGOING,
+    "On Hold": STATUS_GROUPS.ON_HOLD,
+    "Completed": STATUS_GROUPS.COMPLETED,
+    "Closure": STATUS_GROUPS.COMPLETED,
+    "Cancelled": STATUS_GROUPS.CANCELLED
+};
+
+// Get the displayed group status name for a raw status
+function getDisplayStatus(rawStatus) {
+    return STATUS_TO_GROUP[rawStatus] || rawStatus;
+}
+
 // --- UTILITY: IST Timezone Formatter ---
 // Converts dates to Indian Standard Time (IST, UTC+5:30)
 function formatDateToIST(dateInput) {
@@ -205,8 +230,8 @@ function initializeDatabase() {
         usersSheet = ss.insertSheet(SHEET_NAMES.USERS);
     }
     usersSheet.clear();
-    usersSheet.appendRow(["Email", "Name", "Role", "ManagerEmail", "EmailNotifications"]);
-    usersSheet.getRange("A1:E1").setFontWeight("bold").setBackground("#fff2cc");
+    usersSheet.appendRow(["Email", "Name", "Role", "ManagerEmail", "EmailNotifications", "ViewPreference"]);
+    usersSheet.getRange("A1:F1").setFontWeight("bold").setBackground("#fff2cc");
     usersSheet.setFrozenRows(1);
 
     // Create / Format Settings Sheet
@@ -243,7 +268,7 @@ function initializeDatabase() {
 
     // Add Current User as Admin
     const email = Session.getActiveUser().getEmail();
-    usersSheet.appendRow([email, "System Admin", "Admin", "", true]);
+    usersSheet.appendRow([email, "System Admin", "Admin", "", true, "List"]);
 
     return "Database Initialized Successfully!";
 }
@@ -414,10 +439,13 @@ function getProjectsByStatus(status) {
         try {
             if (!row[0]) return; // Skip empty rows
             
-            // Filter by status - only return projects matching this specific status
+            // Filter by status - check if project's raw status matches the requested display group
             const projectStatus = row[4] || "";
-            if (projectStatus !== status) {
-                return; // Skip projects that don't match status
+            const projectDisplayStatus = getDisplayStatus(projectStatus);
+            
+            // Match against the display group status (e.g., "Ongoing" instead of individual statuses)
+            if (projectDisplayStatus !== status) {
+                return; // Skip projects that don't match status group
             }
             
             const projectOwner = row[2] || "";
@@ -550,6 +578,295 @@ function getProjectsByStatus(status) {
     };
 }
 
+/**
+ * Get projects with global filters applied (cross-status filtering)
+ * @param {Object} filterCriteria - Filter criteria object
+ * @param {Array<string>} filterCriteria.statuses - Array of statuses to filter by (empty = all)
+ * @param {Array<string>} filterCriteria.phases - Array of phases to filter by (empty = all)
+ * @param {Array<string>} filterCriteria.owners - Array of owner emails to filter by (empty = all)
+ * @param {Array<string>} filterCriteria.projectTypes - Array of project types to filter by (empty = all)
+ * @param {string} filterCriteria.dateField - Which date field to filter: "startDate", "deadline", "createdAt", "lastUpdated"
+ * @param {string} filterCriteria.dateFrom - Start date (YYYY-MM-DD format)
+ * @param {string} filterCriteria.dateTo - End date (YYYY-MM-DD format)
+ * @param {number} filterCriteria.progressMin - Minimum progress percentage (0-100)
+ * @param {number} filterCriteria.progressMax - Maximum progress percentage (0-100)
+ * @param {number} filterCriteria.offset - Pagination offset (default 0)
+ * @param {number} filterCriteria.limit - Pagination limit (default 100)
+ * @returns {Object} - { projects: [], actions: [], totalCount: number }
+ */
+function getFilteredProjects(filterCriteria) {
+    const email = Session.getActiveUser().getEmail();
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    Logger.log("=== getFilteredProjects START for " + email + " ===");
+    Logger.log("Filter Criteria: " + JSON.stringify(filterCriteria));
+    
+    // Parse filter criteria with defaults
+    const filters = {
+        statuses: filterCriteria.statuses || [],
+        phases: filterCriteria.phases || [],
+        owners: filterCriteria.owners || [],
+        projectTypes: filterCriteria.projectTypes || [],
+        dateField: filterCriteria.dateField || "",
+        dateFrom: filterCriteria.dateFrom || "",
+        dateTo: filterCriteria.dateTo || "",
+        progressMin: filterCriteria.progressMin !== undefined ? filterCriteria.progressMin : 0,
+        progressMax: filterCriteria.progressMax !== undefined ? filterCriteria.progressMax : 100,
+        offset: filterCriteria.offset || 0,
+        limit: filterCriteria.limit || 100
+    };
+    
+    // === Per-request memoization cache ===
+    const requestCache = {
+        userRoles: {},
+        userManagers: {},
+        downstreamEmployees: {}
+    };
+    
+    // Fetch Users for hierarchy
+    const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const usersLastRow = usersSheet.getLastRow();
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 6).getValues() : [[]];
+    
+    // Memoized functions
+    const getUserRoleMemo = (userEmail) => {
+        if (!userEmail) return "None";
+        if (requestCache.userRoles[userEmail] !== undefined) {
+            return requestCache.userRoles[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userRoles[userEmail] = usersData[i][2];
+                return usersData[i][2];
+            }
+        }
+        requestCache.userRoles[userEmail] = "None";
+        return "None";
+    };
+    
+    const getManagerForUserMemo = (userEmail) => {
+        if (!userEmail) return "";
+        if (requestCache.userManagers[userEmail] !== undefined) {
+            return requestCache.userManagers[userEmail];
+        }
+        for (let i = 1; i < usersData.length; i++) {
+            if (usersData[i][0] === userEmail) {
+                requestCache.userManagers[userEmail] = usersData[i][3] || "";
+                return usersData[i][3] || "";
+            }
+        }
+        requestCache.userManagers[userEmail] = "";
+        return "";
+    };
+    
+    const role = getUserRoleMemo(email);
+    
+    const getDownstreamEmployeesMemo = (managerEmail) => {
+        if (!managerEmail) return [];
+        if (requestCache.downstreamEmployees[managerEmail] !== undefined) {
+            return requestCache.downstreamEmployees[managerEmail];
+        }
+        const result = getDownstreamEmployees(managerEmail, usersData);
+        requestCache.downstreamEmployees[managerEmail] = result;
+        return result;
+    };
+    
+    const downstreamEmails = (role === "Manager") ? getDownstreamEmployeesMemo(email) : [];
+    
+    // Fetch ALL projects (no status filtering initially)
+    const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+    const projectsLastRow = projectsSheet.getLastRow();
+    const projectsHeaders = projectsSheet.getRange(1, 1, 1, 16).getValues()[0];
+    const projectsData = projectsLastRow > 1 ? projectsSheet.getRange(2, 1, projectsLastRow - 1, 16).getValues() : [];
+    
+    Logger.log("Total projects in sheet: " + projectsData.length);
+    
+    // Filter and build projects
+    const allProjects = [];
+    projectsData.forEach((row, idx) => {
+        try {
+            const projectOwner = row[2];
+            const projectManager = row[3] || getManagerForUserMemo(projectOwner);
+            const projectStatus = row[4];
+            const projectPhase = row[5];
+            const projectType = row[15] || "";
+            const percentageCompleted = row[6] || 0;
+            
+            // Authorization check
+            let canSee = false;
+            if (role === "Admin") {
+                canSee = true;
+            } else if (projectOwner === email) {
+                canSee = true;
+            } else if (role === "Manager") {
+                if (projectManager === email || downstreamEmails.includes(projectOwner)) {
+                    canSee = true;
+                }
+            }
+            
+            if (!canSee) return;
+            
+            // Apply filters
+            // Status filter
+            if (filters.statuses.length > 0 && !filters.statuses.includes(projectStatus)) {
+                return;
+            }
+            
+            // Phase filter
+            if (filters.phases.length > 0 && !filters.phases.includes(projectPhase)) {
+                return;
+            }
+            
+            // Owner filter
+            if (filters.owners.length > 0 && !filters.owners.includes(projectOwner)) {
+                return;
+            }
+            
+            // Project Type filter
+            if (filters.projectTypes.length > 0 && !filters.projectTypes.includes(projectType)) {
+                return;
+            }
+            
+            // Progress filter
+            if (percentageCompleted < filters.progressMin || percentageCompleted > filters.progressMax) {
+                return;
+            }
+            
+            // Date filter
+            if (filters.dateField && (filters.dateFrom || filters.dateTo)) {
+                let dateToCompare = null;
+                
+                if (filters.dateField === "startDate" && row[7]) {
+                    dateToCompare = new Date(row[7]);
+                } else if (filters.dateField === "deadline" && row[8]) {
+                    dateToCompare = new Date(row[8]);
+                } else if (filters.dateField === "createdAt" && row[12]) {
+                    dateToCompare = new Date(row[12]);
+                } else if (filters.dateField === "lastUpdated" && row[13]) {
+                    dateToCompare = new Date(row[13]);
+                }
+                
+                if (!dateToCompare || isNaN(dateToCompare.getTime())) {
+                    // If date field is empty or invalid, exclude from results when date filter is active
+                    return;
+                }
+                
+                const dateStr = dateToCompare.toISOString().split('T')[0];
+                
+                if (filters.dateFrom && dateStr < filters.dateFrom) {
+                    return;
+                }
+                if (filters.dateTo && dateStr > filters.dateTo) {
+                    return;
+                }
+            }
+            
+            // Parse comments
+            let commentCount = 0;
+            let lastComment = null;
+            if (row[14] && typeof row[14] === 'string' && row[14].trim() !== "") {
+                try {
+                    const comments = JSON.parse(row[14]);
+                    commentCount = comments.length;
+                    if (commentCount > 0) {
+                        lastComment = comments[commentCount - 1];
+                    }
+                } catch (e) { }
+            }
+            
+            // Build project object
+            const project = {
+                id: row[0],
+                name: row[1],
+                owner: projectOwner,
+                manager: projectManager,
+                status: projectStatus,
+                phase: projectPhase,
+                percentageCompleted: percentageCompleted,
+                startDate: row[7] ? formatDateToIST(row[7]) : "",
+                deadline: row[8] ? formatDateToIST(row[8]) : "",
+                outcomes: row[9] || "",
+                risks: row[10] || "",
+                lastUpdatedText: row[11] || "",
+                createdAt: row[12] ? formatDateToIST(row[12]) : "",
+                lastUpdatedDate: row[13] ? formatDateToIST(row[13]) : "",
+                projectType: projectType,
+                commentCount: commentCount,
+                lastComment: lastComment
+            };
+            
+            allProjects.push(project);
+        } catch (err) {
+            Logger.log("Error parsing project row " + idx + ": " + err.message);
+        }
+    });
+    
+    Logger.log("Filtered projects (before pagination): " + allProjects.length);
+    
+    const totalCount = allProjects.length;
+    
+    // Apply pagination
+    const paginatedProjects = allProjects.slice(filters.offset, filters.offset + filters.limit);
+    
+    Logger.log("Paginated projects: " + paginatedProjects.length);
+    
+    // Fetch actions linked to paginated projects
+    const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+    const actionsLastRow = actionsSheet.getLastRow();
+    const actionsData = actionsLastRow > 1 ? actionsSheet.getRange(2, 1, actionsLastRow - 1, 9).getValues() : [];
+    
+    const projectIds = new Set(paginatedProjects.map(p => p.id));
+    const actions = [];
+    
+    actionsData.forEach((row, idx) => {
+        try {
+            const actionProjectId = row[1];
+            const actionOwner = row[3] || paginatedProjects.find(p => p.id === actionProjectId)?.owner || "";
+            
+            // Check if action is linked to a visible project
+            let canSeeAction = false;
+            if (projectIds.has(actionProjectId)) {
+                canSeeAction = true;
+            } else if (role === "Admin") {
+                canSeeAction = true;
+            } else if (actionOwner === email) {
+                canSeeAction = true;
+            } else if (role === "Manager" && downstreamEmails.includes(actionOwner)) {
+                canSeeAction = true;
+            }
+            
+            if (canSeeAction) {
+                let parsedUpdates = [];
+                if (row[8] && typeof row[8] === 'string' && row[8].trim() !== "") {
+                    try { parsedUpdates = JSON.parse(row[8]); } catch (e) { }
+                }
+                
+                actions.push({
+                    id: row[0],
+                    projectId: actionProjectId,
+                    desc: row[2],
+                    owner: actionOwner,
+                    status: row[4],
+                    percentageCompleted: row[5],
+                    priority: row[6],
+                    lastUpdatedDate: row[7] ? formatDateToIST(row[7]) : "",
+                    updates: parsedUpdates
+                });
+            }
+        } catch (err) {
+            Logger.log("Error parsing action row " + idx + ": " + err.message);
+        }
+    });
+    
+    Logger.log("getFilteredProjects completed. Projects: " + paginatedProjects.length + ", Actions: " + actions.length + ", Total Count: " + totalCount);
+    
+    return {
+        projects: paginatedProjects,
+        actions: actions,
+        totalCount: totalCount
+    };
+}
+
 function getDashboardData() {
     const email = Session.getActiveUser().getEmail();
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -567,7 +884,7 @@ function getDashboardData() {
     // Fetch Users for hierarchy
     const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
     const usersLastRow = usersSheet.getLastRow();
-    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+    const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 6).getValues() : [[]];
     
     // Memoized getUserRole for this request
     const getUserRoleMemo = (userEmail) => {
@@ -810,12 +1127,23 @@ function getDashboardData() {
     const userList = usersData.slice(1).map(r => ({
         email: r[0],
         name: r[1],
-        role: r[2]
+        role: r[2],
+        viewPreference: r[5] || "List"  // Default to List if not set
     }));
+    
+    // Get current user's view preference
+    let currentUserViewPreference = "List";  // Default
+    for (let i = 1; i < usersData.length; i++) {
+        if (usersData[i][0] === email) {
+            currentUserViewPreference = usersData[i][5] || "List";
+            break;
+        }
+    }
 
     return {
         email: email,
         role: role,
+        viewPreference: currentUserViewPreference,
         projects: projects,
         actions: actions,
         settings: settings, // Provide global settings to the UI
@@ -1049,7 +1377,7 @@ function getProjectDetails(projectId) {
             // Simple authorization check
             const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
             const usersLastRow = usersSheet.getLastRow();
-            const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 5).getValues() : [[]];
+            const usersData = usersLastRow > 1 ? usersSheet.getRange(1, 1, usersLastRow, 6).getValues() : [[]];
             const downstreamEmails = getDownstreamEmployees(email, usersData);
             
             const canSee = (
@@ -1073,10 +1401,58 @@ function getProjectDetails(projectId) {
                 }
             }
             
-            return {
+            // Build complete project object
+            const project = {
                 id: row[0],
-                comments: parsedComments,
-                updates: parsedComments
+                name: row[1],
+                owner: projectOwner,
+                manager: projectManager,
+                status: row[4],
+                phase: row[5],
+                percentageCompleted: row[6] || 0,
+                startDate: row[7] ? formatDateToIST(row[7]) : "",
+                deadline: row[8] ? formatDateToIST(row[8]) : "",
+                outcomes: row[9] || "",
+                risks: row[10] || "",
+                lastUpdatedText: row[11] || "",
+                createdAt: row[12] ? formatDateToIST(row[12]) : "",
+                lastUpdatedDate: row[13] ? formatDateToIST(row[13]) : "",
+                projectType: row[15] || "",
+                comments: parsedComments
+            };
+            
+            // Fetch all actions linked to this project
+            const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+            const actionsLastRow = actionsSheet.getLastRow();
+            const actionsData = actionsLastRow > 1 ? actionsSheet.getRange(2, 1, actionsLastRow - 1, 9).getValues() : [];
+            
+            const actions = [];
+            actionsData.forEach((aRow) => {
+                if (aRow[1] === projectId) {
+                    let parsedUpdates = [];
+                    if (aRow[8] && typeof aRow[8] === 'string' && aRow[8].trim() !== "") {
+                        try {
+                            parsedUpdates = JSON.parse(aRow[8]);
+                        } catch (e) { }
+                    }
+                    
+                    actions.push({
+                        id: aRow[0],
+                        projectId: aRow[1],
+                        desc: aRow[2],
+                        owner: aRow[3],
+                        status: aRow[4],
+                        percentageCompleted: aRow[5] || 0,
+                        priority: aRow[6],
+                        lastUpdatedDate: aRow[7] ? formatDateToIST(aRow[7]) : "",
+                        updates: parsedUpdates
+                    });
+                }
+            });
+            
+            return {
+                project: project,
+                actions: actions
             };
         }
     }
@@ -1123,7 +1499,7 @@ function getAdminData() {
     return { users, settingsList };
 }
 
-function saveUser(userEmail, name, role, manager, emailEnabled) {
+function saveUser(userEmail, name, role, manager, emailEnabled, viewPreference) {
     // === INPUT VALIDATION ===
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -1140,6 +1516,9 @@ function saveUser(userEmail, name, role, manager, emailEnabled) {
         throw new Error("Error: Role must be one of: None, Manager, Admin, Action Owner.");
     }
     
+    // Default viewPreference to "List" if not provided
+    const viewPref = viewPreference || "List";
+    
     const email = Session.getActiveUser().getEmail();
     if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
 
@@ -1147,7 +1526,7 @@ function saveUser(userEmail, name, role, manager, emailEnabled) {
     const sheet = ss.getSheetByName(SHEET_NAMES.USERS);
     // === PERFORMANCE: Use bounded query instead of getDataRange() ===
     const lastRow = sheet.getLastRow();
-    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 5).getValues() : [[]];
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 6).getValues() : [[]];
 
     // Update if exists
     for (let i = 1; i < data.length; i++) {
@@ -1156,12 +1535,37 @@ function saveUser(userEmail, name, role, manager, emailEnabled) {
             sheet.getRange(i + 1, 3).setValue(role);
             sheet.getRange(i + 1, 4).setValue(manager);
             sheet.getRange(i + 1, 5).setValue(emailEnabled);
+            sheet.getRange(i + 1, 6).setValue(viewPref);
             return "User updated";
         }
     }
     // Create if new
-    sheet.appendRow([userEmail, name, role, manager, emailEnabled]);
+    sheet.appendRow([userEmail, name, role, manager, emailEnabled, viewPref]);
     return "User added";
+}
+
+function updateUserViewPreference(viewPreference) {
+    // Users can update their own view preference without admin rights
+    const email = Session.getActiveUser().getEmail();
+    
+    const validPreferences = ["Card", "List"];
+    if (!validPreferences.includes(viewPreference)) {
+        throw new Error("Error: ViewPreference must be either 'Card' or 'List'.");
+    }
+    
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(SHEET_NAMES.USERS);
+    const lastRow = sheet.getLastRow();
+    const data = lastRow > 1 ? sheet.getRange(1, 1, lastRow, 6).getValues() : [[]];
+    
+    for (let i = 1; i < data.length; i++) {
+        if (data[i][0] === email) {
+            sheet.getRange(i + 1, 6).setValue(viewPreference);
+            return "View preference updated to " + viewPreference;
+        }
+    }
+    
+    throw new Error("User not found in database");
 }
 
 function deleteUser(userEmail) {
@@ -1217,6 +1621,189 @@ function deleteSetting(key, value) {
         if (data[i][0] === key && data[i][1] === value) {
             sheet.deleteRow(i + 1);
             return "Setting removed";
+
+        // === ADMIN SYSTEM FUNCTIONS ===
+
+        /**
+         * Get system-wide statistics for admin dashboard
+         * @returns {Object} System statistics
+         */
+        function getSystemStats() {
+            const email = Session.getActiveUser().getEmail();
+            if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+    
+            const ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+            // Count projects
+            const projectsSheet = ss.getSheetByName(SHEET_NAMES.PROJECTS);
+            const totalProjects = projectsSheet.getLastRow() - 1; // Exclude header
+    
+            // Count actions
+            const actionsSheet = ss.getSheetByName(SHEET_NAMES.ACTIONS);
+            const totalActions = actionsSheet.getLastRow() - 1;
+    
+            // Count users
+            const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+            const totalUsers = usersSheet.getLastRow() - 1;
+    
+            // Count settings
+            const settingsSheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
+            const totalSettings = settingsSheet.getLastRow() - 1;
+    
+            return {
+                totalProjects: totalProjects > 0 ? totalProjects : 0,
+                totalActions: totalActions > 0 ? totalActions : 0,
+                totalUsers: totalUsers > 0 ? totalUsers : 0,
+                totalSettings: totalSettings > 0 ? totalSettings : 0
+            };
+        }
+
+        /**
+         * Export users to CSV format
+         * @returns {string} CSV data
+         */
+        function exportUsersCSV() {
+            const email = Session.getActiveUser().getEmail();
+            if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+    
+            const ss = SpreadsheetApp.getActiveSpreadsheet();
+            const sheet = ss.getSheetByName(SHEET_NAMES.USERS);
+            const lastRow = sheet.getLastRow();
+    
+            if (lastRow < 2) {
+                return "Email,Name,Role,Manager,EmailEnabled\n";
+            }
+    
+            const data = sheet.getRange(1, 1, lastRow, 5).getValues();
+    
+            // Convert to CSV
+            let csv = "";
+            data.forEach((row, index) => {
+                // Escape quotes and wrap in quotes if contains comma
+                const csvRow = row.map(cell => {
+                    const cellStr = String(cell || "");
+                    if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                        return '"' + cellStr.replace(/"/g, '""') + '"';
+                    }
+                    return cellStr;
+                }).join(',');
+                csv += csvRow + '\n';
+            });
+    
+            return csv;
+        }
+
+        /**
+         * Export settings to CSV format
+         * @returns {string} CSV data
+         */
+        function exportSettingsCSV() {
+            const email = Session.getActiveUser().getEmail();
+            if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+    
+            const ss = SpreadsheetApp.getActiveSpreadsheet();
+            const sheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
+            const lastRow = sheet.getLastRow();
+    
+            if (lastRow < 2) {
+                return "Key,Value\n";
+            }
+    
+            const data = sheet.getRange(1, 1, lastRow, 2).getValues();
+    
+            // Convert to CSV
+            let csv = "";
+            data.forEach((row, index) => {
+                const csvRow = row.map(cell => {
+                    const cellStr = String(cell || "");
+                    if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                        return '"' + cellStr.replace(/"/g, '""') + '"';
+                    }
+                    return cellStr;
+                }).join(',');
+                csv += csvRow + '\n';
+            });
+    
+            return csv;
+        }
+
+        /**
+         * Check system health and integrity
+         * @returns {Object} Health status
+         */
+        function checkSystemHealth() {
+            const email = Session.getActiveUser().getEmail();
+            if (getUserRole(email) !== "Admin") throw new Error("Unauthorized");
+    
+            const ss = SpreadsheetApp.getActiveSpreadsheet();
+            let health = {
+                databaseOk: true,
+                databaseMessage: "All sheets accessible",
+                usersOk: true,
+                usersMessage: "Users configured correctly",
+                settingsOk: true,
+                settingsMessage: "Settings configured correctly",
+                overallOk: true,
+                overallMessage: "System healthy"
+            };
+    
+            try {
+                // Check if all required sheets exist
+                const requiredSheets = [SHEET_NAMES.PROJECTS, SHEET_NAMES.ACTIONS, SHEET_NAMES.USERS, SHEET_NAMES.SETTINGS, SHEET_NAMES.COMMENTS];
+                for (const sheetName of requiredSheets) {
+                    const sheet = ss.getSheetByName(sheetName);
+                    if (!sheet) {
+                        health.databaseOk = false;
+                        health.databaseMessage = `Missing required sheet: ${sheetName}`;
+                        health.overallOk = false;
+                        break;
+                    }
+                }
+        
+                // Check users
+                const usersSheet = ss.getSheetByName(SHEET_NAMES.USERS);
+                const userCount = usersSheet.getLastRow() - 1;
+                if (userCount < 1) {
+                    health.usersOk = false;
+                    health.usersMessage = "No users found. Add at least one user.";
+                    health.overallOk = false;
+                } else {
+                    health.usersMessage = `${userCount} users configured`;
+                }
+        
+                // Check admin exists
+                const userData = usersSheet.getLastRow() > 1 ? usersSheet.getRange(2, 1, userCount, 3).getValues() : [];
+                const hasAdmin = userData.some(row => row[2] === "Admin");
+                if (!hasAdmin) {
+                    health.usersOk = false;
+                    health.usersMessage = "⚠️ No admin user found. At least one admin is required.";
+                }
+        
+                // Check settings
+                const settingsSheet = ss.getSheetByName(SHEET_NAMES.SETTINGS);
+                const settingsCount = settingsSheet.getLastRow() - 1;
+                if (settingsCount < 5) {
+                    health.settingsOk = false;
+                    health.settingsMessage = `Only ${settingsCount} settings found. Recommend having ProjectType, Phase, and Status settings.`;
+                } else {
+                    health.settingsMessage = `${settingsCount} settings configured`;
+                }
+        
+                if (health.overallOk) {
+                    health.overallMessage = `✅ System healthy. ${userCount} users, ${settingsCount} settings.`;
+                } else {
+                    health.overallMessage = "⚠️ System has issues. Check details above.";
+                }
+        
+            } catch (error) {
+                health.databaseOk = false;
+                health.databaseMessage = "Error accessing database: " + error.message;
+                health.overallOk = false;
+                health.overallMessage = "❌ System error detected";
+            }
+    
+            return health;
+        }
         }
     }
 }
@@ -1232,19 +1819,26 @@ function createProject(name, startDate, deadline, status, phase, projType, outco
         throw new Error("Error: Project name is required and cannot be empty.");
     }
     
-    if (!startDate || !/^\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(startDate.toString())) {
-        throw new Error("Error: Valid start date is required (format: MM/DD/YYYY or YYYY-MM-DD).");
+    if (!startDate) {
+        throw new Error("Error: Valid start date is required.");
     }
-    
-    if (deadline && !/^\d{1,2}\/\d{1,2}\/\d{4}|\d{4}-\d{2}-\d{2}/.test(deadline.toString())) {
-        throw new Error("Error: Deadline must be in valid date format (MM/DD/YYYY or YYYY-MM-DD).");
+
+    const parsedStartDate = new Date(startDate);
+    if (isNaN(parsedStartDate.getTime())) {
+        throw new Error("Error: Start date is invalid.");
+    }
+
+    let parsedDeadlineDate = null;
+    if (deadline) {
+        parsedDeadlineDate = new Date(deadline);
+        if (isNaN(parsedDeadlineDate.getTime())) {
+            throw new Error("Error: Deadline date is invalid.");
+        }
     }
     
     // Validate date order: start should be before or equal to deadline
-    if (startDate && deadline) {
-        const start = new Date(startDate);
-        const end = new Date(deadline);
-        if (start > end) {
+    if (parsedDeadlineDate) {
+        if (parsedStartDate > parsedDeadlineDate) {
             throw new Error("Error: Start date must be before or equal to deadline.");
         }
     }

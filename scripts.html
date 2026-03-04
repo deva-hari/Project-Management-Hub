@@ -87,6 +87,23 @@
         };
     }
 
+    // === STATUS GROUPING HELPERS ===
+    // Maps individual statuses to their display groups for UI
+    const STATUS_TO_GROUP = {
+        "Not Started": "Ongoing",
+        "In Progress": "Ongoing",
+        "Pending": "Ongoing",
+        "On Hold": "On Hold",
+        "Completed": "Completed & Closure",
+        "Closure": "Completed & Closure",
+        "Cancelled": "Cancelled"
+    };
+
+    // Get the displayed group status name for a raw status
+    function getDisplayStatus(rawStatus) {
+        return STATUS_TO_GROUP[rawStatus] || rawStatus;
+    }
+
     // State
     let appState = {
         email: "",
@@ -104,6 +121,12 @@
         statusTabs: [], // Will be populated from settings
         tabData: {}, // Cache for each status tab: { "All": { projects: [], actions: [], currentPage: 1 }, "In Progress": {...} }
         itemsPerPage: 50
+    };
+    
+    // === VIEW MODE STATE ===
+    let viewState = {
+        currentMode: "List",  // "Card" or "List", default to List
+        expandedProjects: {},  // Cache for expanded project details { projectId: { project, actions } }
     };
 
     function setGlobalLoading(isLoading, text = "Refreshing content...") {
@@ -280,6 +303,20 @@
                     actions: [],
                     metrics: data.metrics || {}
                 };
+                
+                // Set initial view mode from user preference
+                viewState.currentMode = data.viewPreference || "List";
+                
+                // Update view toggle buttons to reflect current mode
+                const btnCard = document.getElementById("btnCardView");
+                const btnList = document.getElementById("btnListView");
+                if (viewState.currentMode === "Card") {
+                    btnCard.classList.add("active");
+                    btnList.classList.remove("active");
+                } else {
+                    btnList.classList.add("active");
+                    btnCard.classList.remove("active");
+                }
 
                 // Store users globally for assignee dropdown
                 window.allUsers = data.users || [];
@@ -319,11 +356,32 @@
     function initializeTabs() {
         if (!appState.settings || !appState.settings.statuses) return;
         
-        // Create tabs: ONLY status tabs (no "All" - that defeats the purpose!)
-        tabState.statusTabs = [...appState.settings.statuses];
+        // Create grouped status tabs from the raw statuses
+        // Each tab represents a display group (e.g., "Ongoing", "On Hold", "Completed & Closure", "Cancelled")
+        const groupedStatuses = new Set();
+        
+        appState.settings.statuses.forEach(rawStatus => {
+            // Map each raw status to its display group
+            const displayStatus = getDisplayStatus(rawStatus);
+            groupedStatuses.add(displayStatus);
+        });
+        
+        // Convert to sorted array for consistent ordering
+        tabState.statusTabs = Array.from(groupedStatuses).sort((a, b) => {
+            // Custom sort: "Ongoing" first, then "On Hold", then "Completed & Closure", then "Cancelled"
+            const order = ["Ongoing", "On Hold", "Completed & Closure", "Cancelled"];
+            const indexA = order.indexOf(a);
+            const indexB = order.indexOf(b);
+            // If status not in order array, put at end
+            if (indexA === -1 && indexB === -1) return 0;
+            if (indexA === -1) return 1;
+            if (indexB === -1) return -1;
+            return indexA - indexB;
+        });
+        
         renderTabs();
         
-        // Load first status tab by default (e.g., "Not Started")
+        // Load first status tab by default (should be "Ongoing")
         if (tabState.statusTabs.length > 0) {
             switchTab(tabState.statusTabs[0]);
         }
@@ -518,19 +576,30 @@
         const endIdx = Math.min(startIdx + itemsPerPage, filteredProjects.length);
         const pageProjects = filteredProjects.slice(startIdx, endIdx);
         
-        console.log(`Rendering page ${pageNum} of ${totalPages} (${pageProjects.length} projects)`);
+        console.log(`Rendering page ${pageNum} of ${totalPages} (${pageProjects.length} projects) in ${viewState.currentMode} view`);
         
         // Use DocumentFragment for efficient rendering
         const fragment = document.createDocumentFragment();
         const tempDiv = document.createElement('div');
-        tempDiv.className = 'row';
         
-        pageProjects.forEach(project => {
-            const col = document.createElement('div');
-            col.className = 'col-md-6 col-lg-4 mb-4';
-            col.innerHTML = generateProjectCard(project);
-            tempDiv.appendChild(col);
-        });
+        if (viewState.currentMode === "Card") {
+            // Card view - Bootstrap grid
+            tempDiv.className = 'row';
+            pageProjects.forEach(project => {
+                const col = document.createElement('div');
+                col.className = 'col-md-6 col-lg-4 mb-4';
+                col.innerHTML = generateProjectCard(project);
+                tempDiv.appendChild(col);
+            });
+        } else {
+            // List view - Full width rows
+            tempDiv.className = 'project-list';
+            pageProjects.forEach(project => {
+                const row = document.createElement('div');
+                row.innerHTML = generateProjectListRow(project);
+                tempDiv.appendChild(row);
+            });
+        }
         
         fragment.appendChild(tempDiv);
         tabContent.innerHTML = '';
@@ -870,10 +939,12 @@
     function getStatusClass(status) {
         switch (status) {
             case "Not Started": return "bg-secondary";
+            case "Pending": return "bg-warning text-dark";
             case "In Progress": return "bg-primary";
-            case "On Hold": return "bg-warning text-dark";
+            case "On Hold": return "bg-danger";
             case "Completed": return "bg-success";
-            case "Cancelled": return "bg-danger";
+            case "Closure": return "bg-success";
+            case "Cancelled": return "bg-dark";
             default: return "bg-secondary";
         }
     }
@@ -888,6 +959,357 @@
             case "Monitoring": return "bg-primary";
             case "Closure": return "bg-success";
             default: return "bg-secondary";
+        }
+    }
+    
+    /**
+     * Generate a list view row for a project (collapsed state)
+     */
+    function generateProjectListRow(project) {
+        const statusClass = getStatusClass(project.status);
+        const phaseClass = getPhaseClass(project.phase);
+        const isExpanded = viewState.expandedProjects[project.id] !== undefined;
+        const expandIcon = isExpanded ? '▼' : '▶';
+        
+        let expandedContent = '';
+        if (isExpanded) {
+            const details = viewState.expandedProjects[project.id];
+            expandedContent = generateExpandedContent(details);
+        }
+        
+        return `
+            <div class="list-row border-bottom" data-project-id="${escapeHtml(project.id)}">
+                <div class="list-row-header p-3 cursor-pointer" onclick="toggleProjectExpand('${escapeHtml(project.id)}')">
+                    <div class="row align-items-center">
+                        <div class="col-auto">
+                            <span class="expand-icon fw-bold" id="expandIcon-${escapeHtml(project.id)}">${expandIcon}</span>
+                        </div>
+                        <div class="col">
+                            <div class="d-flex align-items-center gap-2 flex-wrap">
+                                <h6 class="mb-0 fw-bold">${escapeHtml(project.name)}</h6>
+                                <span class="badge ${statusClass}">${escapeHtml(project.status)}</span>
+                                <span class="badge ${phaseClass}">${escapeHtml(project.phase)}</span>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <span class="text-muted small"><strong>Owner:</strong> ${escapeHtml(project.owner)}</span>
+                        </div>
+                        <div class="col-auto" style="width: 150px;">
+                            <div class="d-flex align-items-center gap-2">
+                                <div class="progress flex-grow-1" style="height: 8px;">
+                                    <div class="progress-bar ${project.percentageCompleted >= 100 ? 'bg-success' : 'bg-primary'}" 
+                                         style="width: ${project.percentageCompleted || 0}%"></div>
+                                </div>
+                                <span class="small fw-bold">${project.percentageCompleted || 0}%</span>
+                            </div>
+                        </div>
+                        <div class="col-auto d-flex gap-2">
+                            <button class="btn btn-sm btn-outline-primary" onclick="event.stopPropagation(); expandProjectDetail('${escapeHtml(project.id)}')">📋 Details</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="event.stopPropagation(); openEditProjectModal('${escapeHtml(project.id)}')">✏️ Edit</button>
+                            <button class="btn btn-sm btn-outline-secondary px-2" title="Refresh" onclick="event.stopPropagation(); refreshExpandedProject('${escapeHtml(project.id)}')">
+                                🔄
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="list-row-content collapse ${isExpanded ? 'show' : ''}" id="expandContent-${escapeHtml(project.id)}">
+                    ${isExpanded ? expandedContent : '<div class="p-3 text-center"><span class="spinner-border spinner-border-sm" role="status"></span> Loading...</div>'}
+                </div>
+            </div>
+        `;
+    }
+    
+    /**
+     * Generate expanded content for a project (details, comments, actions)
+     */
+    function generateExpandedContent(details) {
+        if (!details || !details.project) {
+            return '<div class="p-3 text-danger">Failed to load project details</div>';
+        }
+        
+        const project = details.project;
+        const actions = details.actions || [];
+        const comments = project.comments || [];
+        
+        let actionsHtml = '<p class="text-muted">No actions assigned to this project.</p>';
+        if (actions.length > 0) {
+            actionsHtml = '<div class="table-responsive"><table class="table table-sm table-hover"><thead><tr><th>Action</th><th>Status</th><th>Priority</th><th>Progress</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
+            actions.forEach(action => {
+                const actionStatusClass = action.status === "Completed" ? "success" : 
+                                         action.status === "In Progress" ? "primary" : "secondary";
+                actionsHtml += `
+                    <tr>
+                        <td>${escapeHtml(action.desc || 'No description')}</td>
+                        <td><span class="badge bg-${actionStatusClass}">${escapeHtml(action.status)}</span></td>
+                        <td><span class="badge bg-${action.priority === "High" ? "warning" : "secondary"}">${escapeHtml(action.priority)}</span></td>
+                        <td>
+                            <div class="progress" style="height: 6px; width: 80px;">
+                                <div class="progress-bar" style="width: ${action.percentageCompleted || 0}%"></div>
+                            </div>
+                            <small>${action.percentageCompleted || 0}%</small>
+                        </td>
+                        <td class="small text-muted">${escapeHtml(action.lastUpdatedDate || 'N/A')}</td>
+                        <td>
+                            <button class="btn btn-xs btn-outline-primary px-2 py-1" onclick="openUpdateModal('${escapeHtml(action.id)}', '${escapeHtml(action.status)}', ${action.percentageCompleted || 0})" style="font-size: 0.75rem;">✏️ Update</button>
+                        </td>
+                    </tr>
+                `;
+            });
+            actionsHtml += '</tbody></table></div>';
+        }
+        
+        let commentsHtml = '<p class="text-muted">No updates yet.</p>';
+        if (comments.length > 0) {
+            commentsHtml = '<ul class="list-unstyled">';
+            comments.slice(-5).reverse().forEach(comment => {
+                commentsHtml += `
+                    <li class="mb-2 p-2 bg-light rounded">
+                        <div class="small">
+                            <strong>${escapeHtml(comment.user || 'Unknown')}</strong>
+                            <span class="text-muted">- ${escapeHtml(comment.timestamp || '')}</span>
+                        </div>
+                        <div class="small">${escapeHtml(comment.text || '')}</div>
+                    </li>
+                `;
+            });
+            if (comments.length > 5) {
+                commentsHtml += `<li class="small text-muted mt-2">... and ${comments.length - 5} more</li>`;
+            }
+            commentsHtml += `
+                <li class="mt-3">
+                    <button class="btn btn-sm btn-outline-secondary" style="border: 1px solid #6c757d;" onclick="viewProjectHistory('${escapeHtml(project.id)}')">📜 View All Updates</button>
+                </li>
+            `;
+            commentsHtml += '</ul>';
+        } else if (project.lastComment) {
+            // Show last comment if full history not loaded yet
+            commentsHtml = `
+                <ul class="list-unstyled">
+                    <li class="mb-2 p-2 bg-light rounded">
+                        <div class="small">
+                            <strong>${escapeHtml(project.lastComment.user || 'Unknown')}</strong>
+                            <span class="text-muted">- ${escapeHtml(project.lastComment.timestamp || '')}</span>
+                        </div>
+                        <div class="small">${escapeHtml(project.lastComment.text || '')}</div>
+                    </li>
+                    ${project.commentCount > 1 ? `<li class="small text-muted mt-2"><span class="spinner-border spinner-border-sm me-2"></span>Loading ${project.commentCount - 1} more updates...</li>` : ''}
+                </ul>
+            `;
+        }
+        
+        return `
+            <div class="p-3 bg-light">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <h6 class="fw-bold text-primary mb-2">Project Details</h6>
+                        <dl class="row small mb-0">
+                            <dt class="col-sm-5">Project Type:</dt>
+                            <dd class="col-sm-7">${escapeHtml(project.projectType || 'N/A')}</dd>
+                            
+                            <dt class="col-sm-5">Start Date:</dt>
+                            <dd class="col-sm-7">${escapeHtml(project.startDate || 'N/A')}</dd>
+                            
+                            <dt class="col-sm-5">Deadline:</dt>
+                            <dd class="col-sm-7">${escapeHtml(project.deadline || 'N/A')}</dd>
+                            
+                            <dt class="col-sm-5">Created:</dt>
+                            <dd class="col-sm-7">${escapeHtml(project.createdAt || 'N/A')}</dd>
+                            
+                            <dt class="col-sm-5">Last Updated:</dt>
+                            <dd class="col-sm-7">${escapeHtml(project.lastUpdatedDate || 'N/A')}</dd>
+                        </dl>
+                        
+                        <h6 class="fw-bold text-warning mt-3 mb-2">Business Outcomes</h6>
+                        <p class="small">${escapeHtml(project.outcomes || 'None specified')}</p>
+                        
+                        <h6 class="fw-bold text-danger mt-3 mb-2">Key Risks</h6>
+                        <p class="small">${escapeHtml(project.risks || 'None specified')}</p>
+                    </div>
+                    
+                    <div class="col-md-4 mb-3">
+                        <h6 class="fw-bold text-success mb-2">Actions (${actions.length})</h6>
+                        ${actionsHtml}
+                    </div>
+                    
+                    <div class="col-md-4 mb-3">
+                        <h6 class="fw-bold text-info mb-2">Recent Updates (${comments.length})</h6>
+                        ${commentsHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    /**
+     * Toggle expansion of a project in list view
+     */
+    function toggleProjectExpand(projectId) {
+        const expandIcon = document.getElementById(`expandIcon-${projectId}`);
+        const expandContent = document.getElementById(`expandContent-${projectId}`);
+        
+        if (!expandContent) return;
+        
+        const isCurrentlyExpanded = expandContent.classList.contains('show');
+        
+        if (isCurrentlyExpanded) {
+            // Collapse
+            expandContent.classList.remove('show');
+            if (expandIcon) expandIcon.textContent = '▶';
+        } else {
+            // Expand
+            expandContent.classList.add('show');
+            if (expandIcon) expandIcon.textContent = '▼';
+            
+            // Use already loaded data from tabState (no server call!)
+            if (!viewState.expandedProjects[projectId]) {
+                const currentTabData = tabState.tabData[tabState.currentStatus];
+                if (currentTabData) {
+                    // Find project in already-loaded data
+                    const project = currentTabData.projects.find(p => p.id === projectId);
+                    const projectActions = currentTabData.actions.filter(a => a.projectId === projectId);
+                    
+                    if (project) {
+                        // Build details object from already-loaded data
+                        const details = {
+                            project: project,
+                            actions: projectActions,
+                        };
+                        
+                        // Render immediately with available data
+                        viewState.expandedProjects[projectId] = details;
+                        expandContent.innerHTML = generateExpandedContent(details);
+                        
+                        // Load full comments history in background (only if needed)
+                        if (project.commentCount > 1) {
+                            loadProjectComments(projectId, expandContent);
+                        }
+                    } else {
+                        expandContent.innerHTML = '<div class="p-3 text-danger">Project not found in current tab data</div>';
+                    }
+                } else {
+                    expandContent.innerHTML = '<div class="p-3 text-danger">Tab data not loaded</div>';
+                }
+            }
+        }
+    }
+    
+    /**
+     * Load full comment history for a project (background fetch)
+     */
+    function loadProjectComments(projectId, expandContent) {
+        google.script.run
+            .withSuccessHandler(function(details) {
+                if (details && details.project && details.project.comments) {
+                    // Update cached data with full comment history
+                    if (viewState.expandedProjects[projectId]) {
+                        viewState.expandedProjects[projectId].project.comments = details.project.comments;
+                        
+                        // Re-render if still expanded
+                        if (expandContent.classList.contains('show')) {
+                            expandContent.innerHTML = generateExpandedContent(viewState.expandedProjects[projectId]);
+                        }
+                    }
+                }
+            })
+            .withFailureHandler(function(err) {
+                console.error('Failed to load comments:', err);
+            })
+            .getProjectDetails(projectId);
+    }
+    
+    /**
+     * Refresh expanded project details
+     */
+    function refreshExpandedProject(projectId) {
+        const expandContent = document.getElementById(`expandContent-${projectId}`);
+        if (!expandContent) return;
+        
+        // Only refresh if currently expanded
+        if (!expandContent.classList.contains('show')) {
+            console.log(`Project ${projectId} not expanded, skipping refresh`);
+            return;
+        }
+        
+        // Show spinner
+        expandContent.innerHTML = '<div class="p-3 text-center"><span class="spinner-border spinner-border-sm" role="status"></span> Refreshing...</div>';
+        
+        google.script.run
+            .withSuccessHandler(function(details) {
+                viewState.expandedProjects[projectId] = details;
+                if (expandContent.classList.contains('show')) {
+                    expandContent.innerHTML = generateExpandedContent(details);
+                }
+            })
+            .withFailureHandler(function(err) {
+                if (expandContent.classList.contains('show')) {
+                    expandContent.innerHTML = `<div class="p-3 text-danger">Error: ${escapeHtml(err.message)}</div>`;
+                }
+            })
+            .getProjectDetails(projectId);
+    }
+    
+    /**
+     * Auto-refresh expanded projects when updates occur
+     * Called after creating/updating projects, actions, or comments
+     */
+    function autoRefreshExpandedProjects(projectId = null) {
+        if (projectId) {
+            refreshExpandedProject(projectId);
+        } else {
+            for (const pId in viewState.expandedProjects) {
+                refreshExpandedProject(pId);
+            }
+        }
+    }
+    
+    /**
+     * Clear expanded project cache to force reload with fresh data
+     * Call this after project/action/comment updates
+     */
+    function clearExpandedProjectCache(projectId) {
+        if (projectId && viewState.expandedProjects[projectId]) {
+            delete viewState.expandedProjects[projectId];
+            console.log(`\u2715 Cleared expanded cache for project: ${projectId}`);
+        }
+    }
+    
+    /**
+     * Switch between Card and List view modes
+     */
+    function switchViewMode(mode) {
+        if (mode !== "Card" && mode !== "List") return;
+        
+        // Check if mode actually changed
+        if (viewState.currentMode === mode) return;
+        
+        viewState.currentMode = mode;
+        
+        // Update button styling
+        const btnCard = document.getElementById("btnCardView");
+        const btnList = document.getElementById("btnListView");
+        
+        if (mode === "Card") {
+            btnCard.classList.add("active");
+            btnList.classList.remove("active");
+        } else {
+            btnList.classList.add("active");
+            btnCard.classList.remove("active");
+        }
+        
+        // Save preference to backend (async, non-blocking)
+        google.script.run
+            .withSuccessHandler(function(result) {
+                console.log("View preference saved:", result);
+            })
+            .withFailureHandler(function(err) {
+                console.error("Failed to save view preference:", err);
+            })
+            .updateUserViewPreference(mode);
+        
+        // Re-render only the UI with current data (no server call)
+        const tabData = tabState.tabData[tabState.currentStatus];
+        if (tabData && tabData.filteredProjects) {
+            renderTabPage(tabState.currentStatus, tabData.currentPage, tabData.filteredProjects);
         }
     }
     
@@ -1001,8 +1423,6 @@
         fill('pType', appState.settings.projectTypes || []);
         fill('pStatus', appState.settings.statuses || []);
         fill('pPhase', appState.settings.phases || []);
-        // No filterStatus - using tabs instead
-        fill('filterPhase', ["All", ...(appState.settings.phases || [])]);
         fill('uStatus', appState.settings.statuses || []);
         fill('editProjectType', appState.settings.projectTypes || []);
         fill('editProjectStatus', appState.settings.statuses || []);
@@ -1014,8 +1434,70 @@
         // Populate assignee dropdown
         populateAssigneeDropdown();
     }
+    
+    /**
+     * Populate global filter multi-select dropdowns
+     */
+    function populateGlobalFilterDropdowns() {
+        if (!appState || !appState.settings) return;
+        
+        // Status multi-select
+        const statusFilter = document.getElementById('filterStatus');
+        if (statusFilter) {
+            statusFilter.innerHTML = (appState.settings.statuses || []).map(s => 
+                `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`
+            ).join('');
+        }
+        
+        // Phase multi-select
+        const phaseFilter = document.getElementById('filterPhase');
+        if (phaseFilter) {
+            phaseFilter.innerHTML = (appState.settings.phases || []).map(p => 
+                `<option value="${escapeHtml(p)}">${escapeHtml(p)}</option>`
+            ).join('');
+        }
+        
+        // Project Type multi-select
+        const typeFilter = document.getElementById('filterProjectType');
+        if (typeFilter) {
+            typeFilter.innerHTML = (appState.settings.projectTypes || []).map(t => 
+                `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`
+            ).join('');
+        }
+        
+        // Owner filter will be populated on-demand when filters are expanded
+    }
+    
+    /**
+     * Populate owner multi-select filter (Admin/Manager only)
+     */
+    function populateOwnerFilterMultiple() {
+        const ownerSelect = document.getElementById('filterOwner');
+        if (!ownerSelect) return;
+        
+        // Get unique owners from all loaded projects across all tabs
+        const allProjects = [];
+        for (const status in tabState.tabData) {
+            const tabData = tabState.tabData[status];
+            if (tabData && tabData.projects) {
+                allProjects.push(...tabData.projects);
+            }
+        }
+        
+        const owners = [...new Set(allProjects.map(p => p.owner).filter(o => o))];
+        owners.sort((a, b) => a.localeCompare(b));
+        
+        // Try to resolve to friendly names
+        const options = owners.map(o => {
+            const user = (window.allUsers || []).find(u => u.email === o);
+            const display = user && user.name ? `${user.name}` : o;
+            return `<option value="${o}">${escapeHtml(display)}</option>`;
+        });
+        
+        ownerSelect.innerHTML = options.join('');
+    }
 
-    // Build list of unique project owners for the dashboard filter
+    // Build list of unique project owners for the dashboard filter (LEGACY - kept for compatibility)
     function populateOwnerFilter() {
         const ownerSelect = document.getElementById('filterOwner');
         if (!ownerSelect) return;
@@ -1141,8 +1623,12 @@
         const statusOrder = (appState.settings && appState.settings.statuses) ? appState.settings.statuses : ["Not Started", "Pending", "In Progress", "On Hold", "Completed", "Cancelled", "Closure"];
         let groupCounter = 0;
         
+        // Track which statuses have been rendered
+        const renderedStatuses = new Set();
+        
         statusOrder.forEach(status => {
             if (!groups[status]) return;
+            renderedStatuses.add(status);
             
             const statusColor = getStatusColor(status);
             const groupId = `group-${groupCounter++}`;
@@ -1180,7 +1666,7 @@
                             <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status}
                         </h6>
                     </div>
-                    <div class="collapse show" id="${groupId}">
+                    <div class="collapse" id="${groupId}">
                         <div class="table-responsive">
                             <table class="table table-hover mb-0">
                                 <thead class="table-light">
@@ -1202,7 +1688,73 @@
             `;
             
             fragment.appendChild(groupDiv);
+            renderedStatuses.add(status);
         });
+        
+        // === FALLBACK: Render "Other" group for unmapped statuses ===
+        const unmappedStatuses = Object.keys(groups).filter(status => !renderedStatuses.has(status));
+        if (unmappedStatuses.length > 0) {
+            unmappedStatuses.forEach(status => {
+                const statusColor = 'secondary';
+                const groupId = `group-${groupCounter++}`;
+                
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'col-12 mb-3';
+                
+                let tableRows = '';
+                groups[status].forEach(p => {
+                    const progressWidth = Math.min(100, p.percentageCompleted || 0);
+                    tableRows += `
+                        <tr class="align-middle">
+                            <td>
+                                <div class="fw-bold">${escapeHtml(p.name)}</div>
+                                <small class="text-muted">${escapeHtml(p.id)}</small>
+                            </td>
+                            <td><small>${p.phase}</small></td>
+                            <td>
+                                <div class="progress" style="height: 18px;">
+                                    <div class="progress-bar bg-${getProgressBarColor(p.percentageCompleted || 0)}" style="width: ${progressWidth}%">${p.percentageCompleted || 0}%</div>
+                                </div>
+                            </td>
+                            <td><small>${escapeHtml(p.owner.substring(0, 25))}</small><br><small class="text-muted">${escapeHtml(p.manager || '')}</small></td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-primary" onclick="expandProjectDetail('${escapeHtml(p.id)}')" title="View Project Details">📋 View Details</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                groupDiv.innerHTML = `
+                    <div class="card border-${statusColor} border-start border-5 shadow-sm">
+                        <div class="card-header bg-light border-0 p-3" role="button" data-bs-toggle="collapse" data-bs-target="#${groupId}" style="cursor: pointer;">
+                            <h6 class="mb-0 fw-bold text-${statusColor}">
+                                <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status} <small class="text-muted">(Custom Status)</small>
+                            </h6>
+                        </div>
+                        <div class="collapse" id="${groupId}">
+                            <div class="table-responsive">
+                                <table class="table table-hover mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th style="width: 30%;">Project</th>
+                                            <th style="width: 15%;">Phase</th>
+                                            <th style="width: 15%;">Progress</th>
+                                            <th style="width: 20%;">Owner / Manager</th>
+                                            <th style="width: 20%;">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${tableRows}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                fragment.appendChild(groupDiv);
+            });
+        }
 
         grid.appendChild(fragment);
     }
@@ -1246,9 +1798,11 @@
 
         let html = "";
         const statusOrder = ["Not Started", "Pending", "In Progress", "On Hold", "Completed", "Closure"];
+        const renderedStatuses = new Set();
         
         statusOrder.forEach(status => {
             if (!groups[status]) return;
+            renderedStatuses.add(status);
             
             const statusColor = getStatusColor(status);
             html += `
@@ -1303,6 +1857,62 @@
                 </div>
             `;
         });
+        
+        // === FALLBACK: Render "Other" group for unmapped statuses ===
+        const unmappedStatuses = Object.keys(groups).filter(status => !renderedStatuses.has(status));
+        if (unmappedStatuses.length > 0) {
+            unmappedStatuses.forEach(status => {
+                const statusColor = 'secondary';
+                html += `
+                    <div class="col-12 mb-4">
+                        <div class="card border-${statusColor} border-start border-5 shadow-sm">
+                            <div class="card-header bg-light border-0">
+                                <h6 class="mb-0 fw-bold text-${statusColor}">
+                                    <span class="badge bg-${statusColor} me-2">${groups[status].length}</span>${status} <small class="text-muted">(Custom Status)</small>
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="row">
+                `;
+                
+                groups[status].forEach(p => {
+                    const progressWidth = Math.min(100, p.percentageCompleted || 0);
+                    html += `
+                        <div class="col-md-6 col-lg-4 mb-3">
+                            <div class="card h-100 project-card border-0 shadow-sm">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start mb-2">
+                                        <h6 class="card-title fw-bold flex-grow-1">${escapeHtml(p.name)}</h6>
+                                        <span class="badge bg-${statusColor} text-white">${p.percentageCompleted || 0}%</span>
+                                    </div>
+                                    <small class="text-muted d-block mb-2">${escapeHtml(p.id)} • ${p.projectType}</small>
+                                    
+                                    <div class="progress mb-3" style="height: 6px;">
+                                        <div class="progress-bar bg-${getProgressBarColor(p.percentageCompleted || 0)}" style="width: ${progressWidth}%"></div>
+                                    </div>
+
+                                    <div class="row small mb-3 gx-1">
+                                        <div class="col-6"><span class="text-muted">Owner:</span> <b>${escapeHtml(p.owner.substring(0, 15))}</b></div>
+                                        <div class="col-6"><span class="text-muted">Phase:</span> <b>${p.phase}</b></div>
+                                    </div>
+
+                                    <div class="d-flex gap-1">
+                                        <button class="btn btn-sm btn-outline-primary w-100" onclick="expandProjectDetail('${escapeHtml(p.id)}')">View Details</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                html += `
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+        }
 
         grid.innerHTML = html;
     }
@@ -1597,15 +2207,278 @@
         document.getElementById("filterDateTo").value = "";
         applyFilters();
     }
+    
+    /**
+     * Toggle advanced filters panel visibility
+     */
+    function toggleAdvancedFilters() {
+        const body = document.getElementById("advancedFiltersBody");
+        const icon = document.getElementById("filterToggleIcon");
+        const text = document.getElementById("filterToggleText");
+        
+        if (!body) return;
+        
+        if (body.style.display === "none") {
+            body.style.display = "block";
+            icon.textContent = "▼";
+            text.textContent = "Collapse";
+            
+            // Lazy load filter dropdowns only on first expand
+            if (!body.dataset.filtersLoaded) {
+                populateGlobalFilterDropdowns();
+                populateOwnerFilterMultiple(); // Load owner filter on-demand
+                body.dataset.filtersLoaded = "true";
+            }
+        } else {
+            body.style.display = "none";
+            icon.textContent = "▶";
+            text.textContent = "Expand";
+        }
+    }
+    
+    /**
+     * Apply global filters (cross-status filtering)
+     */
+    function applyGlobalFilters() {
+        console.log("🔍 Applying global filters...");
+        
+        // Collect selected filter values
+        const statusFilter = document.getElementById("filterStatus");
+        const phaseFilter = document.getElementById("filterPhase");
+        const ownerFilter = document.getElementById("filterOwner");
+        const typeFilter = document.getElementById("filterProjectType");
+        const dateFieldFilter = document.getElementById("filterDateField");
+        const dateFromFilter = document.getElementById("filterDateFrom");
+        const dateToFilter = document.getElementById("filterDateTo");
+        const progressMinFilter = document.getElementById("filterProgressMin");
+        const progressMaxFilter = document.getElementById("filterProgressMax");
+        
+        // Build filter criteria object
+        const filterCriteria = {
+            statuses: Array.from(statusFilter.selectedOptions).map(opt => opt.value),
+            phases: Array.from(phaseFilter.selectedOptions).map(opt => opt.value),
+            owners: ownerFilter ? Array.from(ownerFilter.selectedOptions).map(opt => opt.value) : [],
+            projectTypes: Array.from(typeFilter.selectedOptions).map(opt => opt.value),
+            dateField: dateFieldFilter.value || "",
+            dateFrom: dateFromFilter.value || "",
+            dateTo: dateToFilter.value || "",
+            progressMin: parseInt(progressMinFilter.value) || 0,
+            progressMax: parseInt(progressMaxFilter.value) || 100,
+            offset: 0,
+            limit: 200  // Get more results for global view
+        };
+        
+        // Check if any filters are actually applied
+        const hasFilters = filterCriteria.statuses.length > 0 ||
+                          filterCriteria.phases.length > 0 ||
+                          filterCriteria.owners.length > 0 ||
+                          filterCriteria.projectTypes.length > 0 ||
+                          (filterCriteria.dateField && (filterCriteria.dateFrom || filterCriteria.dateTo)) ||
+                          filterCriteria.progressMin > 0 ||
+                          filterCriteria.progressMax < 100;
+        
+        if (!hasFilters) {
+            showAlert("Please select at least one filter criterion.", "warning");
+            return;
+        }
+        
+        // Show loading
+        setGlobalLoading(true, "Applying filters...");
+        
+        // Show filtered view banner and results card, hide tabs
+        const banner = document.getElementById("filteredViewBanner");
+        const tabsCard = document.getElementById("statusTabsCard");
+        const filteredCard = document.getElementById("filteredResultsCard");
+        if (banner) banner.classList.remove("d-none");
+        if (tabsCard) tabsCard.style.display = "none";
+        if (filteredCard) filteredCard.classList.remove("d-none");
+        
+        // Call backend to get filtered projects
+        google.script.run
+            .withSuccessHandler(function(result) {
+                console.log("✓ Filtered results received:", result.totalCount, "total,", result.projects.length, "returned");
+                
+                // Store results in a special global filter state
+                tabState.globalFilterActive = true;
+                tabState.globalFilterResults = {
+                    projects: result.projects,
+                    actions: result.actions,
+                    totalCount: result.totalCount
+                };
+                
+                // Render filtered results
+                renderGlobalFilteredResults(result);
+                
+                // Update result count in banner
+                const countBadge = document.getElementById("filterResultCount");
+                if (countBadge) {
+                    countBadge.textContent = `Showing ${result.projects.length} of ${result.totalCount} results`;
+                }
+                
+                setGlobalLoading(false);
+                showAlert(`Found ${result.totalCount} projects matching your criteria`, "success");
+            })
+            .withFailureHandler(function(err) {
+                console.error("❌ Failed to apply filters:", err);
+                setGlobalLoading(false);
+                showAlert("Failed to apply filters: " + err.message, "danger");
+            })
+            .getFilteredProjects(filterCriteria);
+    }
+    
+    /**
+     * Render global filtered results (bypassing tabs)
+     */
+    function renderGlobalFilteredResults(result) {
+        const filteredContent = document.getElementById("filteredResultsContent");
+        if (!filteredContent) return;
+        
+        if (result.projects.length === 0) {
+            filteredContent.innerHTML = '<div class="text-center text-muted py-5"><h5>No projects match your filter criteria</h5><p>Try adjusting your filters</p></div>';
+            return;
+        }
+        
+        // Use DocumentFragment for efficient rendering
+        const fragment = document.createDocumentFragment();
+        const tempDiv = document.createElement('div');
+        
+        if (viewState.currentMode === "Card") {
+            // Card view
+            tempDiv.className = 'row';
+            result.projects.forEach(project => {
+                const col = document.createElement('div');
+                col.className = 'col-md-6 col-lg-4 mb-4';
+                
+                // Generate card HTML with actions from filtered results
+                const projectActions = result.actions.filter(a => a.projectId === project.id);
+                col.innerHTML = generateProjectCardFiltered(project, projectActions);
+                tempDiv.appendChild(col);
+            });
+        } else {
+            // List view
+            tempDiv.className = 'project-list';
+            result.projects.forEach(project => {
+                const row = document.createElement('div');
+                row.innerHTML = generateProjectListRow(project);
+                tempDiv.appendChild(row);
+            });
+        }
+        
+        fragment.appendChild(tempDiv);
+        filteredContent.innerHTML = '';
+        filteredContent.appendChild(fragment);
+    }
+    
+    /**
+     * Generate project card for filtered results (similar to generateProjectCard but with pre-filtered actions)
+     */
+    function generateProjectCardFiltered(project, projectActions) {
+        const statusClass = getStatusClass(project.status);
+        const phaseClass = getPhaseClass(project.phase);
+        
+        let actionsHtml = '';
+        if (projectActions.length > 0) {
+            actionsHtml = '<div class="mt-2"><small class="text-muted fw-bold">Actions:</small>';
+            projectActions.slice(0, 3).forEach(action => {
+                const actionStatusClass = action.status === "Completed" ? "success" : 
+                                         action.status === "In Progress" ? "primary" : "secondary";
+                actionsHtml += `
+                    <div class="d-flex justify-content-between align-items-center mt-1 p-2 bg-light rounded">
+                        <small>${escapeHtml(action.desc || 'No description')}</small>
+                        <span class="badge bg-${actionStatusClass}">${escapeHtml(action.status)}</span>
+                    </div>
+                `;
+            });
+            if (projectActions.length > 3) {
+                actionsHtml += `<small class="text-muted">... and ${projectActions.length - 3} more</small>`;
+            }
+            actionsHtml += '</div>';
+        }
+        
+        return `
+            <div class="card h-100 shadow-sm hover-shadow">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h6 class="card-title mb-0 fw-bold">${escapeHtml(project.name)}</h6>
+                    </div>
+                    <div class="mb-2">
+                        <span class="badge ${statusClass}">${escapeHtml(project.status)}</span>
+                        <span class="badge ${phaseClass}">${escapeHtml(project.phase)}</span>
+                    </div>
+                    <p class="card-text small text-muted mb-2">
+                        <strong>Owner:</strong> ${escapeHtml(project.owner)}<br>
+                        <strong>Progress:</strong> ${escapeHtml(project.percentageCompleted || 0)}%
+                    </p>
+                    <div class="progress mb-2" style="height: 8px;">
+                        <div class="progress-bar ${project.percentageCompleted >= 100 ? 'bg-success' : 'bg-primary'}" 
+                             style="width: ${project.percentageCompleted || 0}%"></div>
+                    </div>
+                    ${actionsHtml}
+                    ${project.lastComment ? `
+                        <div class="mt-2 p-2 bg-light rounded">
+                            <small class="text-muted d-block"><strong>Latest Update:</strong></small>
+                            <small>${escapeHtml(project.lastComment.text || '')}</small>
+                        </div>
+                    ` : ''}
+                    <div class="mt-3 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-sm btn-outline-info" onclick="expandProjectDetail('${escapeHtml(project.id)}')">📋 View Details</button>
+                        <button class="btn btn-sm btn-primary" onclick="openEditProjectModal('${escapeHtml(project.id)}')">✏️ Edit</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+    
+    /**
+     * Clear all global filters and return to tab view
+     */
+    function clearAllFilters() {
+        console.log("🧹 Clearing all filters...");
+        
+        // Reset all filter inputs
+        document.getElementById("filterStatus").selectedIndex = -1;
+        document.getElementById("filterPhase").selectedIndex = -1;
+        const ownerFilter = document.getElementById("filterOwner");
+        if (ownerFilter) ownerFilter.selectedIndex = -1;
+        document.getElementById("filterProjectType").selectedIndex = -1;
+        document.getElementById("filterDateField").value = "";
+        document.getElementById("filterDateFrom").value = "";
+        document.getElementById("filterDateTo").value = "";
+        document.getElementById("filterProgressMin").value = "0";
+        document.getElementById("filterProgressMax").value = "100";
+        
+        // Hide filtered view banner and results card, show tabs
+        const banner = document.getElementById("filteredViewBanner");
+        const tabsCard = document.getElementById("statusTabsCard");
+        const filteredCard = document.getElementById("filteredResultsCard");
+        if (banner) banner.classList.add("d-none");
+        if (tabsCard) tabsCard.style.display = "block";
+        if (filteredCard) filteredCard.classList.add("d-none");
+        
+        // Clear global filter state
+        tabState.globalFilterActive = false;
+        tabState.globalFilterResults = null;
+        
+        // Return to current tab view
+        renderTabContent(tabState.currentStatus);
+        
+        showAlert("Filters cleared - returned to tab view", "info");
+    }
 
     // --- Utils ---
     function getStatusColor(status) {
-        // 5-color scheme for status grouping
-        if (status === "Completed" || status === "Closure") return "success"; // green
-        if (status === "On Hold" || status === "Cancelled") return "danger"; // red
+        // Handle both raw statuses and grouped statuses
+        // Raw statuses: "Not Started", "In Progress", "Pending", "On Hold", "Completed", "Cancelled", "Closure"
+        // Grouped statuses: "Ongoing", "On Hold", "Completed & Closure", "Cancelled"
+        
+        if (status === "Ongoing") return "primary"; // blue for ongoing items
+        if (status === "Not Started") return "secondary"; // grey
         if (status === "In Progress") return "info"; // blue
         if (status === "Pending") return "warning"; // yellow
-        return "secondary"; // purple/grey fallback
+        if (status === "On Hold") return "danger"; // red
+        if (status === "Completed & Closure" || status === "Completed" || status === "Closure") return "success"; // green
+        if (status === "Cancelled") return "dark"; // dark for cancelled
+        return "secondary"; // fallback
     }
 
     function getStatusBadge(status) {
@@ -1652,6 +2525,18 @@
             showAlert("Project phase is required", "danger");
             return;
         }
+        if (!pStart) {
+            showAlert("Valid start date is required", "danger");
+            return;
+        }
+        if (isNaN(new Date(pStart).getTime())) {
+            showAlert("Start date is invalid", "danger");
+            return;
+        }
+        if (deadline && isNaN(new Date(deadline).getTime())) {
+            showAlert("Deadline date is invalid", "danger");
+            return;
+        }
         if (pStart && deadline && new Date(pStart) > new Date(deadline)) {
             showAlert("Start date cannot be after deadline", "danger");
             return;
@@ -1674,6 +2559,9 @@
                 // === PERFORMANCE: Clear caches and refresh current tab ===
                 showAlert("Project Created Successfully!", "success");
                 SESSION_CACHE.invalidate();
+                
+                // Clear expanded cache if exists (unlikely for new project)
+                clearExpandedProjectCache(res.projectId);
                 
                 // Refresh current tab to show new project
                 refreshCurrentTab();
@@ -1720,6 +2608,13 @@
 
                 showAlert("Action assigned successfully!", "success");
                 clearAllCaches();
+                
+                // Clear expanded cache for this project to force reload
+                clearExpandedProjectCache(projId);
+                
+                // Refresh expanded view if this project is currently expanded
+                autoRefreshExpandedProjects(projId);
+                
                 loadDashboard(null, true);
             })
             .withFailureHandler(err => {
@@ -1774,11 +2669,20 @@
                 if (res && res.success && res.action) {
                     // Update action in tab data
                     let updated = false;
+                    let projectId = null;
+                    
                     for (const status in tabState.tabData) {
                         if (tabState.tabData[status] && tabState.tabData[status].actions) {
                             const actionIndex = tabState.tabData[status].actions.findIndex(a => a.id === actionId);
                             if (actionIndex !== -1) {
                                 tabState.tabData[status].actions[actionIndex] = { ...tabState.tabData[status].actions[actionIndex], ...res.action };
+                                
+                                // Find the project ID for this action
+                                if (tabState.tabData[status].projects) {
+                                    const actionObj = tabState.tabData[status].actions[actionIndex];
+                                    projectId = actionObj.projectId;
+                                }
+                                
                                 updated = true;
                                 break;
                             }
@@ -1788,6 +2692,12 @@
                     // Update cache
                     SESSION_CACHE.updateItem('actions', actionId, res.action);
                     
+                    // Clear expanded cache for this project to force reload with fresh data
+                    if (projectId) {
+                        clearExpandedProjectCache(projectId);
+                        autoRefreshExpandedProjects(projectId);
+                    }
+                    
                     // Re-render current tab
                     if (updated) {
                         renderTabContent(tabState.currentStatus);
@@ -1795,7 +2705,7 @@
                     setGlobalLoading(false);
                 } else {
                     // Fallback to full reload if server doesn't return differential data
-                    refreshTab(tabState.currentStatus);
+                    refreshCurrentTab();
                     setGlobalLoading(false);
                 }
             })
@@ -1813,11 +2723,12 @@
     // === PERFORMANCE: Lazy-load full project history on demand ===
     function viewProjectHistory(projectId) {
         setGlobalLoading(true, "Loading project history...");
+        appState.currentProjectId = projectId;  // Set current project context
         
         google.script.run
             .withSuccessHandler(details => {
                 setGlobalLoading(false);
-                if (!details || !details.comments) {
+                if (!details || !details.project || !details.project.comments) {
                     showAlert("No history available", "info");
                     return;
                 }
@@ -1825,12 +2736,13 @@
                 // Show history in modal
                 const historyModal = new bootstrap.Modal(document.getElementById("historyModal"));
                 const historyBody = document.getElementById("historyModalBody");
+                const comments = details.project.comments;
                 
-                if (details.comments.length === 0) {
+                if (comments.length === 0) {
                     historyBody.innerHTML = '<p class="text-muted">No update history yet.</p>';
                 } else {
                     let html = '<div class="list-group">';
-                    details.comments.forEach((c, idx) => {
+                    comments.forEach((c, idx) => {
                         const canEdit = appState.role === 'Admin' || c.user === appState.email;
                         html += `
                             <div class="list-group-item" data-comment-idx="${idx}">
@@ -1868,6 +2780,12 @@
                             confirmDeleteNote(projectId, timestamp);
                         });
                     });
+                }
+                
+                // Set the modal title
+                const titleEl = document.querySelector('#historyModal .modal-title');
+                if (titleEl) {
+                    titleEl.textContent = `${details.project.name} - Update History`;
                 }
                 
                 historyModal.show();
@@ -2010,9 +2928,57 @@
                 btn.innerHTML = "Save Changes";
 
                 showAlert("Project updated successfully!", "success");
-                // Clear all caches since project status might have changed
-                clearAllCaches();
-                loadDashboard(null, true);
+                
+                // === OPTIMIZATION: Only refresh affected tabs, not the entire dashboard ===
+                const projectId = document.getElementById("editProjectId").value;
+                const project = findProjectById(projectId);
+                const newStatus = document.getElementById("editProjectStatus").value;
+                
+                const oldDisplayStatus = project ? getDisplayStatus(project.status) : null;
+                const newDisplayStatus = getDisplayStatus(newStatus);
+                
+                // Collect tabs to refresh
+                const tabsToRefresh = new Set();
+                if (oldDisplayStatus) {
+                    tabsToRefresh.add(oldDisplayStatus);
+                    console.log(`Marking old status tab for refresh: ${oldDisplayStatus}`);
+                }
+                tabsToRefresh.add(newDisplayStatus);
+                console.log(`Marking new status tab for refresh: ${newDisplayStatus}`);
+                
+                // Clear cache only for affected tabs
+                tabsToRefresh.forEach(tabStatus => {
+                    if (tabState.tabData[tabStatus]) {
+                        delete tabState.tabData[tabStatus];
+                        console.log(`✗ Cleared cache for ${tabStatus} tab`);
+                    }
+                });
+                
+                // Refresh affected tabs - reload sequentially
+                let refreshIndex = 0;
+                const tabsToRefreshArray = Array.from(tabsToRefresh);
+                
+                function refreshNextTab() {
+                    if (refreshIndex < tabsToRefreshArray.length) {
+                        const tab = tabsToRefreshArray[refreshIndex++];
+                        loadTabData(tab, true);
+                    } else {
+                        // Refresh expanded view if this project is currently expanded
+                        const projectId = document.getElementById("editProjectId").value;
+                        clearExpandedProjectCache(projectId);
+                        autoRefreshExpandedProjects(projectId);
+                        
+                        // After all tabs are refreshed, switch to the new status tab
+                        switchTab(newDisplayStatus);
+                        setGlobalLoading(false);
+                    }
+                }
+                
+                if (tabsToRefreshArray.length > 0) {
+                    refreshNextTab();
+                } else {
+                    setGlobalLoading(false);
+                }
             })
             .withFailureHandler(err => {
                 console.error("Update error:", err);
@@ -2033,6 +2999,14 @@
 
         const pId = document.getElementById("cProjectId").value;
         const text = document.getElementById("cText").value;
+        
+        if (!pId || pId.trim() === "") {
+            showAlert("Error: No project selected. Please try again.", "danger");
+            btn.disabled = false;
+            btn.innerHTML = "Add Comment";
+            setGlobalLoading(false);
+            return;
+        }
 
         google.script.run
             .withSuccessHandler(res => {
@@ -2048,7 +3022,13 @@
 
                 showAlert("Comment added.", "success");
                 
-                // Refresh the project (will clear tab cache automatically)
+                // Clear expanded cache for this project to force reload with fresh comments
+                clearExpandedProjectCache(pId);
+                
+                // Refresh the expanded view if this project is currently expanded
+                autoRefreshExpandedProjects(pId);
+                
+                // Also refresh the full project in the current tab
                 refreshProject(pId);
                 
                 setGlobalLoading(false);
@@ -2248,62 +3228,81 @@
             showAlert("No project selected", "warning");
             return;
         }
-        const project = findProjectById(appState.currentProjectId);
-        if (!project) {
-            showAlert("Project not found. Try refreshing the tab.", "warning");
-            return;
-        }
-        // Use project updates as history
-        const historyArray = project.updates || [];
-        openHistoryModal(historyArray, appState.currentProjectId);
+        // Lazy-load full project details with comments
+        setGlobalLoading(true, "Loading notes...");
+        google.script.run
+            .withSuccessHandler(details => {
+                setGlobalLoading(false);
+                if (!details || !details.project) {
+                    showAlert("Project not found.", "warning");
+                    return;
+                }
+                const historyArray = details.project.comments || [];
+                openHistoryModal(historyArray, appState.currentProjectId);
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error loading notes: " + err.message, "danger");
+            })
+            .getProjectDetails(appState.currentProjectId);
     }
 
     function openProjectNotesModal(projectId) {
         appState.currentProjectId = projectId;
-        const project = findProjectById(projectId);
-        if (!project) {
-            showAlert("Project not found. Try refreshing the tab.", "warning");
-            return;
-        }
-        
-        // Show a modal with existing notes and ability to add new ones
-        const container = document.getElementById("historyTimeline");
-        container.innerHTML = "";
-        
-        const historyArray = project.updates || [];
-        if (historyArray.length === 0) {
-            container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
-        } else {
-            [...historyArray].reverse().forEach(log => {
-                const date = formatDateToIST(log.timestamp);
-                const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
-                const canEdit = appState.role === 'Admin';
-                const canDelete = appState.role === 'Admin';
+        // Lazy-load full project details with comments
+        setGlobalLoading(true, "Loading notes...");
+        google.script.run
+            .withSuccessHandler(details => {
+                setGlobalLoading(false);
+                if (!details || !details.project) {
+                    showAlert("Project not found.", "warning");
+                    return;
+                }
                 
-                container.innerHTML += `
-                  <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
-                    <div class="card-body py-2">
-                       <div class="d-flex justify-content-between align-items-center mb-1">
-                          <small class="fw-bold text-dark">${log.user}</small>
-                          <div>
-                            <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
-                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit note" onclick="openEditNoteModal('${projectId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
-                            ${canDelete ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                const project = details.project;
+                const container = document.getElementById("historyTimeline");
+                container.innerHTML = "";
+                
+                const historyArray = project.comments || [];
+                if (historyArray.length === 0) {
+                    container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
+                } else {
+                    [...historyArray].reverse().forEach(log => {
+                        const date = formatDateToIST(log.timestamp);
+                        const statusBadge = log.status ? `<span class="badge bg-secondary ms-2">${log.status}</span>` : "";
+                        const canEdit = appState.role === 'Admin';
+                        const canDelete = appState.role === 'Admin';
+                        
+                        container.innerHTML += `
+                          <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
+                            <div class="card-body py-2">
+                               <div class="d-flex justify-content-between align-items-center mb-1">
+                                  <small class="fw-bold text-dark">${log.user}</small>
+                                  <div>
+                                    <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                                    ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit note" onclick="openEditNoteModal('${projectId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
+                                    ${canDelete ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                                  </div>
+                               </div>
+                               <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                            </div>
                           </div>
-                       </div>
-                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
-                    </div>
-                  </div>
-                `;
-            });
-        }
-        
-        // Update history modal title
-        const modal = document.getElementById("historyModal");
-        const title = modal.querySelector(".modal-title");
-        title.textContent = `${project.name} - Notes & History`;
-        
-        new bootstrap.Modal(modal).show();
+                        `;
+                    });
+                }
+                
+                // Update history modal title
+                const modal = document.getElementById("historyModal");
+                const title = modal.querySelector(".modal-title");
+                title.textContent = `${project.name} - Notes & History`;
+                
+                new bootstrap.Modal(modal).show();
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error loading notes: " + err.message, "danger");
+            })
+            .getProjectDetails(projectId);
     }
 
     function openEditNoteModal(projectId, noteTimestamp, currentText) {
@@ -2398,51 +3397,66 @@
 
     // rebuild the history/notes panel when the modal is already visible
     function refreshHistoryContent(projectId) {
-        const project = findProjectById(projectId);
-        if (!project) return;
         const container = document.getElementById("historyTimeline");
         if (!container) return;
-        container.innerHTML = "";
-        const historyArray = project.updates || [];
-        if (historyArray.length === 0) {
-            container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
-        } else {
-            [...historyArray].reverse().forEach(log => {
-                const date = formatDateToIST(log.timestamp);
-                const statusBadge = log.status ? `<span class="badge bg-secondary ms-1">${log.status}</span>` : "";
-                const canEdit = appState.role === 'Admin';
-                const canDelete = appState.role === 'Admin';
+        
+        // Lazy-load fresh project details with comments
+        google.script.run
+            .withSuccessHandler(details => {
+                if (!details || !details.project) {
+                    container.innerHTML = "<div class='text-muted text-center py-4'>Project not found.</div>";
+                    return;
+                }
                 
-                container.innerHTML += `
-                  <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
-                    <div class="card-body py-2">
-                       <div class="d-flex justify-content-between align-items-center mb-1">
-                          <small class="fw-bold text-dark">${log.user}</small>
-                          <div>
-                            <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
-                            ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit note" onclick="openEditNoteModal('${projectId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
-                            ${canDelete ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                const project = details.project;
+                container.innerHTML = "";
+                const historyArray = project.comments || [];
+                
+                if (historyArray.length === 0) {
+                    container.innerHTML = "<div class='text-muted text-center py-4'>No notes yet. Add one below!</div>";
+                } else {
+                    [...historyArray].reverse().forEach(log => {
+                        const date = formatDateToIST(log.timestamp);
+                        const statusBadge = log.status ? `<span class="badge bg-secondary ms-1">${log.status}</span>` : "";
+                        const canEdit = appState.role === 'Admin';
+                        const canDelete = appState.role === 'Admin';
+                        
+                        container.innerHTML += `
+                          <div class="card mb-3 shadow-sm border-start border-primary border-4 rounded-0">
+                            <div class="card-body py-2">
+                               <div class="d-flex justify-content-between align-items-center mb-1">
+                                  <small class="fw-bold text-dark">${log.user}</small>
+                                  <div>
+                                    <small class="text-muted"><i class="far fa-clock"></i> ${date}</small>
+                                    ${canEdit ? `<button class="btn btn-sm btn-link text-warning p-0 ms-2" title="Edit note" onclick="openEditNoteModal('${projectId}','${log.timestamp}',\`${escapeHtml(log.text).replace(/`/g, '\\`')}\`)">✏️</button>` : ''}
+                                    ${canDelete ? `<button class="btn btn-sm btn-link text-danger p-0 ms-2" title="Delete note" onclick="confirmDeleteNote('${projectId}','${log.timestamp}')">&times;</button>` : ''}
+                                  </div>
+                               </div>
+                               <p class="mb-0 small">${log.text} ${statusBadge}</p>
+                            </div>
                           </div>
-                       </div>
-                       <p class="mb-0 small">${log.text} ${statusBadge}</p>
-                    </div>
-                  </div>
-                `;
-            });
-        }
-        // update title if present
-        const modal = document.getElementById("historyModal");
-        if (modal) {
-            const titleEl = modal.querySelector(".modal-title");
-            if (titleEl) titleEl.textContent = `${project.name} - Notes & History`;
-        }
+                        `;
+                    });
+                }
+                
+                // update title if present
+                const modal = document.getElementById("historyModal");
+                if (modal) {
+                    const titleEl = modal.querySelector(".modal-title");
+                    if (titleEl) titleEl.textContent = `${project.name} - Notes & History`;
+                }
+            })
+            .withFailureHandler(err => {
+                container.innerHTML = "<div class='text-muted text-center py-4'>Error loading notes.</div>";
+            })
+            .getProjectDetails(projectId);
     }
 
     function toggleMetrics() {
         const metricsDiv = document.getElementById("rollupMetrics");
         const btn = document.getElementById("metricsToggleBtn");
         const icon = document.getElementById("metricsToggleIcon");
-        const label = btn.querySelector('.btn-label');
+        const text = document.getElementById("metricsToggleText");
         
         if (metricsDiv.classList.contains("collapsed")) {
             // === PERFORMANCE: Load metrics on-demand when expanding ===
@@ -2450,7 +3464,7 @@
                 // Metrics not loaded yet, fetch them
                 btn.disabled = true;
                 icon.textContent = "⏳";
-                if (label) label.textContent = " Loading...";
+                if (text) text.textContent = "Loading...";
                 
                 google.script.run
                     .withSuccessHandler(metrics => {
@@ -2460,13 +3474,13 @@
                         // Now expand
                         metricsDiv.classList.remove("collapsed");
                         icon.textContent = "▼";
-                        if (label) label.textContent = " Collapse";
+                        if (text) text.textContent = "Collapse";
                         btn.disabled = false;
                     })
                     .withFailureHandler(err => {
                         showAlert("Failed to load metrics: " + err.message, "danger");
                         icon.textContent = "▶";
-                        if (label) label.textContent = " Expand";
+                        if (text) text.textContent = "Expand";
                         btn.disabled = false;
                     })
                     .getMetrics();
@@ -2474,13 +3488,13 @@
                 // Metrics already loaded, just expand
                 metricsDiv.classList.remove("collapsed");
                 icon.textContent = "▼";
-                if (label) label.textContent = " Collapse";
+                if (text) text.textContent = "Collapse";
             }
         } else {
             // collapse
             metricsDiv.classList.add("collapsed");
             icon.textContent = "▶";
-            if (label) label.textContent = " Expand";
+            if (text) text.textContent = "Expand";
         }
     }
     
@@ -2522,8 +3536,8 @@
 
     function getLatestProjectUpdate(project) {
         // Try to get the latest comment/update first
-        if (project.updates && project.updates.length > 0) {
-            const latest = project.updates[project.updates.length - 1];
+        if (project.comments && project.comments.length > 0) {
+            const latest = project.comments[project.comments.length - 1];
             return latest.text || project.lastUpdatedText || "No updates yet.";
         }
         return project.lastUpdatedText || "No updates yet.";
@@ -2585,14 +3599,56 @@
     }
 
     function showAlert(message, type) {
-        const container = document.getElementById("alertContainer");
-        container.innerHTML = `
-      <div class="alert alert-${type} alert-dismissible fade show shadow-sm" role="alert">
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-      </div>
-    `;
-        setTimeout(() => { container.innerHTML = ""; }, 5000);
+        const modalEl = document.getElementById("notificationModal");
+        const titleEl = document.getElementById("notificationModalTitle");
+        const bodyEl = document.getElementById("notificationModalBody");
+        const headerEl = document.getElementById("notificationModalHeader");
+        const contentEl = document.getElementById("notificationModalContent");
+
+        if (!modalEl || !titleEl || !bodyEl || !headerEl || !contentEl) {
+            const container = document.getElementById("alertContainer");
+            if (container) {
+                container.classList.remove("d-none");
+                container.innerHTML = `<div class="alert alert-${type} shadow-sm" role="alert">${escapeHtml(String(message || ""))}</div>`;
+            }
+            return;
+        }
+
+        const normalizedType = ["success", "danger", "warning", "info", "primary", "secondary"].includes(type) ? type : "info";
+        const titleMap = {
+            success: "Success",
+            danger: "Error",
+            warning: "Warning",
+            info: "Information",
+            primary: "Notice",
+            secondary: "Notice"
+        };
+
+        titleEl.textContent = titleMap[normalizedType] || "Information";
+        bodyEl.textContent = String(message || "");
+
+        headerEl.className = `modal-header bg-${normalizedType} ${normalizedType === "warning" || normalizedType === "info" ? "text-dark" : "text-white"}`;
+        contentEl.style.borderLeftColor = normalizedType === "danger" ? "#dc3545" : normalizedType === "success" ? "#198754" : normalizedType === "warning" ? "#ffc107" : normalizedType === "info" ? "#0dcaf0" : "#0d6efd";
+
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl, {
+            backdrop: false,
+            keyboard: true,
+            focus: true
+        });
+
+        modal.show();
+
+        const autoHideDelay = normalizedType === "danger" ? 6500 : 3500;
+        clearTimeout(showAlert._timer);
+        showAlert._timer = setTimeout(() => {
+            try {
+                if (modalEl.classList.contains("show")) {
+                    modal.hide();
+                }
+            } catch (e) {
+                // ignore modal hide errors
+            }
+        }, autoHideDelay);
     }
 
     // ==============================================
@@ -2601,11 +3657,11 @@
 
     function toggleAdminPanel() {
         const isHidden = document.getElementById("adminPanel").classList.contains("d-none");
-        const dashGrid = document.querySelector("#projectsGrid").closest(".card"); // get the project grid container card
+        const statusTabsCard = document.getElementById("statusTabsCard"); // get the status tabs container card
 
         if (isHidden) {
             document.getElementById("adminPanel").classList.remove("d-none");
-            dashGrid.classList.add("d-none");
+            if (statusTabsCard) statusTabsCard.classList.add("d-none");
             document.getElementById("mainActions").classList.add("d-none");
             document.getElementById("mainHeading").innerText = "Admin Console";
             document.getElementById("btnAdminPanel").innerText = "Exit Admin";
@@ -2613,7 +3669,7 @@
             loadAdminData();
         } else {
             document.getElementById("adminPanel").classList.add("d-none");
-            dashGrid.classList.remove("d-none");
+            if (statusTabsCard) statusTabsCard.classList.remove("d-none");
             document.getElementById("mainActions").classList.remove("d-none");
             document.getElementById("mainHeading").innerText = "Dashboard";
             document.getElementById("btnAdminPanel").innerText = "Admin Panel";
@@ -2629,10 +3685,13 @@
             .withSuccessHandler(renderAdminData)
             .withFailureHandler(err => showAlert(err.message, "danger"))
             .getAdminData();
+        
+        // Also load system stats
+        refreshAdminStats();
     }
 
     function renderAdminData(data) {
-        // Render Users
+        // Render users
         const uBody = document.getElementById("adminUsersTableBody");
         uBody.innerHTML = "";
         data.users.forEach(u => {
@@ -2643,12 +3702,26 @@
                  <td><span class="badge bg-secondary">${escapeHtml(u.role)}</span></td>
                  <td>${escapeHtml(u.manager || "-")}</td>
                  <td>${u.emailEnabled ? '<span class="text-success fw-bold">✓ Yes</span>' : '<span class="text-muted">✗ No</span>'}</td>
-                 <td><button class="btn btn-sm btn-outline-danger py-0 btn-delete-user" data-email="${escapeHtml(u.email)}">Drop</button></td>
+                 <td>
+                   <button class="btn btn-sm btn-outline-primary py-0 me-1 btn-edit-user"
+                           data-email="${escapeHtml(u.email)}"
+                           data-name="${escapeHtml(u.name)}"
+                           data-role="${escapeHtml(u.role)}"
+                           data-manager="${escapeHtml(u.manager || '')}"
+                           data-emailenabled="${u.emailEnabled}">Edit</button>
+                   <button class="btn btn-sm btn-outline-danger py-0 btn-delete-user" data-email="${escapeHtml(u.email)}">Drop</button>
+                 </td>
                </tr>
             `;
         });
 
-        // Render Settings Grouped
+        // Update admin counters
+        const userCountEl = document.getElementById('adminUserCount');
+        const settingCountEl = document.getElementById('adminSettingCount');
+        if (userCountEl) userCountEl.textContent = `${data.users.length} Users`;
+        if (settingCountEl) settingCountEl.textContent = `${data.settingsList.length} Settings`;
+
+        // Render settings grouped
         const sGrid = document.getElementById("adminSettingsGrid");
         sGrid.innerHTML = "";
 
@@ -2661,7 +3734,6 @@
         for (const [key, values] of Object.entries(groupedSettings)) {
             let rowHtml = "";
             values.forEach(v => {
-                // FIXED: Use data attributes instead of onclick to prevent XSS
                 rowHtml += `
                  <li class="list-group-item d-flex justify-content-between align-items-center py-1">
                    <small>${escapeHtml(v)}</small>
@@ -2680,7 +3752,7 @@
             `;
         }
 
-        // FIXED: Add event listeners instead of onclick handlers
+        // Wire setting delete buttons
         document.querySelectorAll('.btn-delete-setting').forEach(btn => {
             btn.addEventListener('click', function() {
                 const key = this.getAttribute('data-key');
@@ -2693,6 +3765,7 @@
             });
         });
 
+        // Wire user delete buttons
         document.querySelectorAll('.btn-delete-user').forEach(btn => {
             btn.addEventListener('click', function() {
                 const email = this.getAttribute('data-email');
@@ -2703,6 +3776,157 @@
                     .deleteUser(email);
             });
         });
+
+        // Wire user edit buttons
+        document.querySelectorAll('.btn-edit-user').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const email = this.getAttribute('data-email');
+                const name = this.getAttribute('data-name');
+                const role = this.getAttribute('data-role');
+                const manager = this.getAttribute('data-manager');
+                const emailEnabled = this.getAttribute('data-emailenabled') === 'true';
+
+                document.getElementById('auEmail').value = email;
+                document.getElementById('auName').value = name;
+                document.getElementById('auRole').value = role;
+                document.getElementById('auManager').value = manager;
+                document.getElementById('auEmailEnabled').checked = emailEnabled;
+
+                document.getElementById('auEmail').readOnly = true;
+                document.getElementById('auEmail').classList.add('bg-light');
+
+                document.getElementById('btnSaveUser').textContent = 'Update';
+                document.getElementById('btnSaveUser').classList.remove('btn-primary');
+                document.getElementById('btnSaveUser').classList.add('btn-warning');
+
+                const cancelBtn = document.getElementById('btnCancelUser');
+                if (cancelBtn) cancelBtn.classList.remove('d-none');
+
+                document.getElementById('addUserForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        });
+    }
+
+    // === ADMIN SYSTEM INFO FUNCTIONS ===
+
+    function refreshAdminStats() {
+        setGlobalLoading(true, "Refreshing statistics...");
+        google.script.run
+            .withSuccessHandler(stats => {
+                const totalProjectsEl = document.getElementById('statTotalProjects');
+                const totalActionsEl = document.getElementById('statTotalActions');
+                const totalUsersEl = document.getElementById('statTotalUsers');
+                const totalSettingsEl = document.getElementById('statTotalSettings');
+
+                if (totalProjectsEl) totalProjectsEl.textContent = stats.totalProjects || 0;
+                if (totalActionsEl) totalActionsEl.textContent = stats.totalActions || 0;
+                if (totalUsersEl) totalUsersEl.textContent = stats.totalUsers || 0;
+                if (totalSettingsEl) totalSettingsEl.textContent = stats.totalSettings || 0;
+
+                setGlobalLoading(false);
+                showAlert("Statistics refreshed successfully", "success");
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error refreshing stats: " + err.message, "danger");
+            })
+            .getSystemStats();
+    }
+
+    function exportUsersToCSV() {
+        setGlobalLoading(true, "Exporting users...");
+        google.script.run
+            .withSuccessHandler(csvData => {
+                const blob = new Blob([csvData], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `users_export_${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                window.URL.revokeObjectURL(url);
+                setGlobalLoading(false);
+                showAlert("Users exported successfully", "success");
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error exporting users: " + err.message, "danger");
+            })
+            .exportUsersCSV();
+    }
+
+    function exportSettingsToCSV() {
+        setGlobalLoading(true, "Exporting settings...");
+        google.script.run
+            .withSuccessHandler(csvData => {
+                const blob = new Blob([csvData], { type: 'text/csv' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `settings_export_${new Date().toISOString().split('T')[0]}.csv`;
+                a.click();
+                window.URL.revokeObjectURL(url);
+                setGlobalLoading(false);
+                showAlert("Settings exported successfully", "success");
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error exporting settings: " + err.message, "danger");
+            })
+            .exportSettingsCSV();
+    }
+
+    function showSystemHealth() {
+        setGlobalLoading(true, "Running system health checks...");
+        google.script.run
+            .withSuccessHandler(health => {
+                let html = '<div class="row g-3">';
+
+                html += `
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded ${health.databaseOk ? 'border-success bg-success bg-opacity-10' : 'border-danger bg-danger bg-opacity-10'}">
+                            <h6 class="fw-bold">${health.databaseOk ? '✅' : '❌'} Database Connection</h6>
+                            <small class="text-muted">${health.databaseMessage}</small>
+                        </div>
+                    </div>
+                `;
+
+                html += `
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded ${health.usersOk ? 'border-success bg-success bg-opacity-10' : 'border-warning bg-warning bg-opacity-10'}">
+                            <h6 class="fw-bold">${health.usersOk ? '✅' : '⚠️'} User Configuration</h6>
+                            <small class="text-muted">${health.usersMessage}</small>
+                        </div>
+                    </div>
+                `;
+
+                html += `
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded ${health.settingsOk ? 'border-success bg-success bg-opacity-10' : 'border-warning bg-warning bg-opacity-10'}">
+                            <h6 class="fw-bold">${health.settingsOk ? '✅' : '⚠️'} Settings Configuration</h6>
+                            <small class="text-muted">${health.settingsMessage}</small>
+                        </div>
+                    </div>
+                `;
+
+                html += `
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded ${health.overallOk ? 'border-success bg-success bg-opacity-10' : 'border-danger bg-danger bg-opacity-10'}">
+                            <h6 class="fw-bold">${health.overallOk ? '✅' : '❌'} Overall Status</h6>
+                            <small class="text-muted">${health.overallMessage}</small>
+                        </div>
+                    </div>
+                `;
+
+                html += '</div>';
+                document.getElementById('systemHealthContent').innerHTML = html;
+                setGlobalLoading(false);
+                showAlert("Health check completed", "info");
+            })
+            .withFailureHandler(err => {
+                setGlobalLoading(false);
+                showAlert("Error running health check: " + err.message, "danger");
+            })
+            .checkSystemHealth();
     }
 
     // --- Admin Mutations ---
@@ -2721,7 +3945,7 @@
         google.script.run
             .withSuccessHandler(res => {
                 showAlert(res, "success");
-                document.getElementById("addUserForm").reset();
+                resetUserForm();
                 loadAdminData();
                 btn.disabled = false;
             })
@@ -2730,6 +3954,58 @@
                 btn.disabled = false;
             })
             .saveUser(email, name, role, manager, emailEnabled);
+    }
+
+    function resetUserForm() {
+        document.getElementById("addUserForm").reset();
+        document.getElementById('auEmail').readOnly = false;
+        document.getElementById('auEmail').classList.remove('bg-light');
+
+        const saveBtn = document.getElementById('btnSaveUser');
+        saveBtn.textContent = 'Save';
+        saveBtn.classList.remove('btn-warning');
+        saveBtn.classList.add('btn-primary');
+
+        const cancelBtn = document.getElementById('btnCancelUser');
+        if (cancelBtn) cancelBtn.classList.add('d-none');
+    }
+
+    function filterUsersTable() {
+        const searchInput = document.getElementById('userSearchInput');
+        if (!searchInput) return;
+
+        const filter = searchInput.value.toLowerCase();
+        const tbody = document.getElementById('adminUsersTableBody');
+        if (!tbody) return;
+
+        const rows = tbody.getElementsByTagName('tr');
+        let visibleCount = 0;
+
+        for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            const cells = row.getElementsByTagName('td');
+            let found = false;
+
+            for (let j = 0; j < Math.min(4, cells.length); j++) {
+                const cellText = cells[j].textContent || cells[j].innerText;
+                if (cellText.toLowerCase().indexOf(filter) > -1) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found || filter === '') {
+                row.style.display = '';
+                visibleCount++;
+            } else {
+                row.style.display = 'none';
+            }
+        }
+
+        const userCountEl = document.getElementById('adminUserCount');
+        if (userCountEl) {
+            userCountEl.textContent = `${visibleCount} Users${filter ? ' (filtered)' : ''}`;
+        }
     }
 
     function deleteUser(email) {

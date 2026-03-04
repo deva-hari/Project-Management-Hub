@@ -30,14 +30,14 @@
   </nav>
 
   <!-- Main Content -->
-  <div class="container mt-4">
+  <div class="container-fluid px-3 mt-4" style="max-width: 98%;">
 
-    <!-- Error/Success Toasts -->
-    <div id="alertContainer" class="mb-3"></div>
+    <!-- Legacy alert container (kept for compatibility; modal notifications are primary) -->
+    <div id="alertContainer" class="mb-3 d-none"></div>
 
     <!-- Global reload indicator -->
     <div id="globalLoading" class="d-none align-items-center gap-2 mb-3 text-muted small">
-      <span class="spinner-border spinner-border-sm text-primary" role="status" aria-hidden="true"></span>
+      <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
       <span id="globalLoadingText">Refreshing content...</span>
     </div>
 
@@ -53,14 +53,16 @@
       </div>
     </div>
 
-    <!-- Manager Roll-Up Metrics -->
-    <div class="mb-3 d-flex justify-content-between align-items-center">
-      <h5 class="mb-0 fw-bold">📊 Dashboard Metrics</h5>
-      <button class="btn btn-sm btn-outline-secondary" id="metricsToggleBtn" onclick="toggleMetrics()">
-        <span id="metricsToggleIcon">▶</span><span class="btn-label"> Expand</span>
-      </button>
-    </div>
-    <div class="row mb-4 collapsed" id="rollupMetrics">
+    <!-- Dashboard Metrics -->
+    <div class="card mb-3 shadow-sm">
+      <div class="card-header bg-light border-0 py-3 d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 fw-bold text-primary">📊 Dashboard Metrics</h6>
+        <button class="btn btn-sm btn-outline-secondary" id="metricsToggleBtn" onclick="toggleMetrics()">
+          <span id="metricsToggleIcon">▶</span> <span id="metricsToggleText">Expand</span>
+        </button>
+      </div>
+      <div class="card-body p-0">
+        <div class="row mb-4 collapsed" id="rollupMetrics">
       <!-- Row 1: Key Metrics -->
       <div class="col-lg-2 col-md-6 col-sm-6 mb-3">
         <div class="card bg-primary text-white shadow-sm h-100">
@@ -219,59 +221,173 @@
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </div>      </div>    </div>
 
     <!-- Dashboard Filters & Refresh -->
     <div class="card mb-3 shadow-sm">
-      <div class="card-body">
-        <div class="row align-items-end g-3">
-          <div class="col-md-2">
-            <label class="form-label fw-bold">Filter Phase</label>
-            <select class="form-select" id="filterPhase" onchange="applyFilters()">
-              <option value="All">All Phases</option>
+      <div class="card-header bg-light border-0 py-3 d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 fw-bold text-primary">🔍 Advanced Filters</h6>
+        <button class="btn btn-sm btn-outline-secondary" id="toggleFiltersBtn" onclick="toggleAdvancedFilters()">
+          <span id="filterToggleIcon">▶</span> <span id="filterToggleText">Expand</span>
+        </button>
+      </div>
+      <div class="card-body" id="advancedFiltersBody" style="display:none;">
+        <div class="row g-3 mb-3">
+          <!-- Status Filter -->
+          <div class="col-md-3">
+            <label class="form-label fw-bold small">Status</label>
+            <select class="form-select form-select-sm" id="filterStatus" multiple size="3">
+              <!-- Populated dynamically -->
             </select>
+            <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
           </div>
+          
+          <!-- Phase Filter -->
+          <div class="col-md-3">
+            <label class="form-label fw-bold small">Phase</label>
+            <select class="form-select form-select-sm" id="filterPhase" multiple size="3">
+              <!-- Populated dynamically -->
+            </select>
+            <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
+          </div>
+          
+          <!-- Owner Filter (Admin/Manager only) -->
           <div class="col-md-3 d-none" id="ownerFilterContainer">
-            <label class="form-label fw-bold">Filter Owner</label>
-            <select class="form-select" id="filterOwner" onchange="applyFilters()">
-              <option value="All">All Owners</option>
+            <label class="form-label fw-bold small">Owner</label>
+            <select class="form-select form-select-sm" id="filterOwner" multiple size="3">
+              <!-- Populated dynamically -->
+            </select>
+            <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
+          </div>
+          
+          <!-- Project Type Filter -->
+          <div class="col-md-3">
+            <label class="form-label fw-bold small">Project Type</label>
+            <select class="form-select form-select-sm" id="filterProjectType" multiple size="3">
+              <!-- Populated dynamically -->
+            </select>
+            <small class="text-muted">Hold Ctrl/Cmd to select multiple</small>
+          </div>
+        </div>
+        
+        <div class="row g-3 mb-3">
+          <!-- Date Filter Type -->
+          <div class="col-md-2">
+            <label class="form-label fw-bold small">Date Field</label>
+            <select class="form-select form-select-sm" id="filterDateField">
+              <option value="">No Date Filter</option>
+              <option value="startDate">Start Date</option>
+              <option value="deadline">Deadline</option>
+              <option value="createdAt">Created Date</option>
+              <option value="lastUpdated">Last Updated</option>
             </select>
           </div>
+          
+          <!-- Date From -->
           <div class="col-md-2">
-            <label class="form-label fw-bold">Updated From</label>
-            <input type="date" class="form-control" id="filterDateFrom" onchange="applyFilters()">
+            <label class="form-label fw-bold small">Date From</label>
+            <input type="date" class="form-control form-control-sm" id="filterDateFrom">
           </div>
+          
+          <!-- Date To -->
           <div class="col-md-2">
-            <label class="form-label fw-bold">Updated To</label>
-            <input type="date" class="form-control" id="filterDateTo" onchange="applyFilters()">
+            <label class="form-label fw-bold small">Date To</label>
+            <input type="date" class="form-control form-control-sm" id="filterDateTo">
           </div>
-          <div class="col-md-3 d-flex justify-content-end gap-2">
-            <button class="btn btn-outline-secondary flex-fill" onclick="clearFilters()">Clear Filters</button>
-            <button class="btn btn-primary" onclick="refreshAll()" title="Clear cache and reload everything">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
-                <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
-              </svg> Refresh All
-            </button>
+          
+          <!-- Progress Range -->
+          <div class="col-md-3">
+            <label class="form-label fw-bold small">Progress Range</label>
+            <div class="d-flex gap-2 align-items-center">
+              <input type="number" class="form-control form-control-sm" id="filterProgressMin" min="0" max="100" value="0" placeholder="Min %">
+              <span>-</span>
+              <input type="number" class="form-control form-control-sm" id="filterProgressMax" min="0" max="100" value="100" placeholder="Max %">
+            </div>
+          </div>
+        </div>
+        
+        <!-- Filter Actions -->
+        <div class="row g-2">
+          <div class="col-12">
+            <div class="d-flex justify-content-end align-items-center flex-wrap gap-2">
+              <div class="d-flex gap-2">
+                <button class="btn btn-sm btn-outline-secondary" onclick="clearAllFilters()">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                    <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                    <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+                  </svg>
+                  Clear All
+                </button>
+                <button class="btn btn-sm btn-primary" onclick="applyGlobalFilters()">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                    <path d="M6 10.5a.5.5 0 0 1 .5-.5h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 1-.5-.5zm-2-3a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7a.5.5 0 0 1-.5-.5zm-2-3a.5.5 0 0 1 .5-.5h11a.5.5 0 0 1 0 1h-11a.5.5 0 0 1-.5-.5z"/>
+                  </svg>
+                  Apply Filters
+                </button>
+                <button class="btn btn-sm btn-outline-primary" onclick="refreshAll()" title="Clear cache and reload everything">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                    <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+                    <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+                  </svg>
+                  Refresh All
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Filtered View Banner (shown when global filters are active) -->
+    <div class="alert alert-info d-none" id="filteredViewBanner">
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <strong>🔍 Filtered View Active</strong> - <span id="filterResultCount">Showing 0 results</span>
+        </div>
+        <button class="btn btn-sm btn-outline-info" onclick="clearAllFilters()">Return to Tab View</button>
+      </div>
+    </div>
+
+    <!-- Filtered Results Container (shown when global filters are active) -->
+    <div class="card shadow-sm mb-4 d-none" id="filteredResultsCard">
+      <div class="card-body">
+        <div id="filteredResultsContent">
+          <!-- Filtered results will be dynamically rendered here -->
+        </div>
+      </div>
+    </div>
+
     <!-- Status Tabs -->
-    <div class="card shadow-sm mb-4">
+    <div class="card shadow-sm mb-4" id="statusTabsCard">
       <div class="card-header bg-white border-bottom-0 py-3">
-        <div class="d-flex justify-content-between align-items-center">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
           <ul class="nav nav-tabs card-header-tabs mb-0" id="statusTabs" role="tablist">
             <!-- Tabs will be dynamically generated -->
           </ul>
-          <button class="btn btn-sm btn-outline-primary" id="refreshTabBtn" onclick="refreshCurrentTab()" title="Refresh current tab">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
-              <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
-              <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
-            </svg> Refresh Tab
-          </button>
+          <div class="d-flex gap-2">
+            <!-- View Toggle -->
+            <div class="btn-group btn-group-sm" role="group" aria-label="View mode toggle">
+              <button type="button" class="btn btn-outline-primary" id="btnCardView" onclick="switchViewMode('Card')">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="mb-1">
+                  <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3z"/>
+                </svg>
+                Card
+              </button>
+              <button type="button" class="btn btn-outline-primary active" id="btnListView" onclick="switchViewMode('List')">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="mb-1">
+                  <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
+                </svg>
+                List
+              </button>
+            </div>
+            
+            <button class="btn btn-sm btn-outline-primary" id="refreshTabBtn" onclick="refreshCurrentTab()" title="Refresh current tab">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+                <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+              </svg> Refresh Tab
+            </button>
+          </div>
         </div>
       </div>
       <div class="card-body">
@@ -295,14 +411,41 @@
 
     <!-- Admin Panel (Phase 3) -->
     <div id="adminPanel" class="d-none">
-      <ul class="nav nav-tabs mb-4" role="tablist">
+      <!-- Admin Panel Header -->
+      <div class="row mb-4">
+        <div class="col-12">
+          <div class="card shadow-sm border-primary border-top border-3">
+            <div class="card-body py-2">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <h5 class="mb-0 fw-bold text-primary">🔧 Admin Console</h5>
+                  <small class="text-muted">Manage users, system settings, and configurations</small>
+                </div>
+                <div class="text-end">
+                  <span class="badge bg-info me-2" id="adminUserCount">0 Users</span>
+                  <span class="badge bg-secondary" id="adminSettingCount">0 Settings</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <ul class="nav nav-tabs nav-fill mb-4" role="tablist">
         <li class="nav-item">
-          <button class="nav-link active fw-bold" data-bs-toggle="tab" data-bs-target="#admin-users" type="button">User
-            Management</button>
+          <button class="nav-link active fw-bold" data-bs-toggle="tab" data-bs-target="#admin-users" type="button">
+            👥 User Management
+          </button>
         </li>
         <li class="nav-item">
-          <button class="nav-link fw-bold" data-bs-toggle="tab" data-bs-target="#admin-settings" type="button">Global
-            Settings</button>
+          <button class="nav-link fw-bold" data-bs-toggle="tab" data-bs-target="#admin-settings" type="button">
+            ⚙️ Global Settings
+                  <li class="nav-item">
+                    <button class="nav-link fw-bold" data-bs-toggle="tab" data-bs-target="#admin-system" type="button">
+                      📊 System Info
+                    </button>
+                  </li>
+          </button>
         </li>
       </ul>
 
@@ -310,9 +453,21 @@
         <!-- Users Admin Tab -->
         <div class="tab-pane fade show active" id="admin-users" tabindex="0">
           <div class="card shadow-sm mb-3">
+                        <div class="card-header bg-light border-0 py-3">
+                          <div class="d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0 fw-bold">📋 Users List</h5>
+                            <div class="input-group" style="max-width: 300px;">
+                              <span class="input-group-text bg-white border-end-0">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                                  <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+                                </svg>
+                              </span>
+                              <input type="search" class="form-control form-control-sm border-start-0" id="userSearchInput" placeholder="Search users..." onkeyup="filterUsersTable()">
+                            </div>
+                          </div>
+                        </div>
             <div class="card-body">
-              <h5 class="fw-bold">Users List</h5>
-              <table class="table table-sm mt-3">
+              <table class="table table-sm table-hover mt-3">
                 <thead class="table-light">
                   <tr>
                     <th>Email</th>
@@ -320,7 +475,7 @@
                     <th>Role</th>
                     <th>Manager Email</th>
                     <th>Email Alerts</th>
-                    <th>Actions</th>
+                    <th class="text-end">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="adminUsersTableBody">
@@ -329,9 +484,12 @@
                   </tr>
                 </tbody>
               </table>
-
+              
+              <div class="bg-primary bg-opacity-10 p-3 rounded mb-2">
+                <h6 class="mb-0 fw-bold text-primary">➕ Add / ✏️ Edit User</h6>
+              </div>
               <form id="addUserForm"
-                class="row g-2 align-items-end mt-2 bg-light p-3 rounded border border-light-subtle">
+                class="row g-2 align-items-end bg-white p-3 rounded border border-2">
                 <div class="col-md-3">
                   <label class="small fw-bold">Email</label>
                   <input type="email" id="auEmail" class="form-control form-control-sm" required>
@@ -358,10 +516,117 @@
                       title="Receive Daily Summary Emails?">
                   </div>
                 </div>
-                <div class="col-md-1">
+                <div class="col-md-1 d-flex gap-1">
                   <button type="submit" class="btn btn-sm btn-primary w-100" id="btnSaveUser">Save</button>
+                                  <button type="button" class="btn btn-sm btn-secondary d-none" id="btnCancelUser" onclick="resetUserForm()">Cancel</button>
                 </div>
               </form>
+        
+                    <!-- System Info Tab -->
+                    <div class="tab-pane fade" id="admin-system" tabindex="0">
+                      <div class="row">
+                        <!-- System Statistics -->
+                        <div class="col-md-6 mb-3">
+                          <div class="card shadow-sm h-100">
+                            <div class="card-header bg-light border-0 py-3">
+                              <h5 class="mb-0 fw-bold">📊 System Statistics</h5>
+                            </div>
+                            <div class="card-body">
+                              <div class="row g-3">
+                                <div class="col-6">
+                                  <div class="p-3 bg-primary bg-opacity-10 rounded text-center">
+                                    <h3 class="mb-0 fw-bold text-primary" id="statTotalProjects">0</h3>
+                                    <small class="text-muted">Total Projects</small>
+                                  </div>
+                                </div>
+                                <div class="col-6">
+                                  <div class="p-3 bg-success bg-opacity-10 rounded text-center">
+                                    <h3 class="mb-0 fw-bold text-success" id="statTotalActions">0</h3>
+                                    <small class="text-muted">Total Actions</small>
+                                  </div>
+                                </div>
+                                <div class="col-6">
+                                  <div class="p-3 bg-info bg-opacity-10 rounded text-center">
+                                    <h3 class="mb-0 fw-bold text-info" id="statTotalUsers">0</h3>
+                                    <small class="text-muted">Active Users</small>
+                                  </div>
+                                </div>
+                                <div class="col-6">
+                                  <div class="p-3 bg-warning bg-opacity-10 rounded text-center">
+                                    <h3 class="mb-0 fw-bold text-warning" id="statTotalSettings">0</h3>
+                                    <small class="text-muted">Settings</small>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+            
+                        <!-- Quick Actions -->
+                        <div class="col-md-6 mb-3">
+                          <div class="card shadow-sm h-100">
+                            <div class="card-header bg-light border-0 py-3">
+                              <h5 class="mb-0 fw-bold">⚡ Quick Actions</h5>
+                            </div>
+                            <div class="card-body">
+                              <div class="d-grid gap-2">
+                                <button class="btn btn-outline-primary" onclick="exportUsersToCSV()">
+                                  📥 Export Users to CSV
+                                </button>
+                                <button class="btn btn-outline-success" onclick="exportSettingsToCSV()">
+                                  📥 Export Settings to CSV
+                                </button>
+                                <button class="btn btn-outline-info" onclick="refreshAdminStats()">
+                                  🔄 Refresh Statistics
+                                </button>
+                                <button class="btn btn-outline-warning" onclick="showSystemHealth()">
+                                  💊 Check System Health
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+            
+                        <!-- System Health -->
+                        <div class="col-12 mb-3">
+                          <div class="card shadow-sm">
+                            <div class="card-header bg-light border-0 py-3">
+                              <h5 class="mb-0 fw-bold">💊 System Health</h5>
+                            </div>
+                            <div class="card-body">
+                              <div id="systemHealthContent">
+                                <p class="text-muted text-center py-3">Click "Check System Health" to run diagnostics</p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+            
+                        <!-- Recent Activity Log -->
+                        <div class="col-12 mb-3">
+                          <div class="card shadow-sm">
+                            <div class="card-header bg-light border-0 py-3">
+                              <h5 class="mb-0 fw-bold">📝 Admin Activity Guidelines</h5>
+                            </div>
+                            <div class="card-body">
+                              <ul class="list-group list-group-flush">
+                                <li class="list-group-item">
+                                  <strong>User Management:</strong> Add, edit, or remove users. Manage roles and permissions.
+                                </li>
+                                <li class="list-group-item">
+                                  <strong>Settings Management:</strong> Configure project types, phases, and statuses used throughout the system.
+                                </li>
+                                <li class="list-group-item">
+                                  <strong>Data Export:</strong> Export user and settings data for backup or analysis.
+                                </li>
+                                <li class="list-group-item">
+                                  <strong>Health Checks:</strong> Monitor system health and identify potential issues.
+                                </li>
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
             </div>
           </div>
         </div>
@@ -369,17 +634,23 @@
         <!-- Settings Admin Tab -->
         <div class="tab-pane fade" id="admin-settings" tabindex="0">
           <div class="card shadow-sm">
+                        <div class="card-header bg-light border-0 py-3">
+                          <h5 class="mb-0 fw-bold">⚙️ System Settings</h5>
+                          <small class="text-muted">Manage dropdowns, statuses, and system-wide configurations</small>
+                        </div>
             <div class="card-body">
-              <h5 class="fw-bold">Expandable Dropdowns</h5>
-              <p class="text-muted small">Add or remove system-wide dropdown variables. Careful when removing settings
-                currently in use!</p>
+              <div class="alert alert-warning alert-dismissible fade show" role="alert">
+                <strong>⚠️ Warning:</strong> Removing settings currently in use may cause data inconsistencies.
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+              </div>
 
               <div class="row" id="adminSettingsGrid">
                 <!-- JS will inject tables here for ProjectType, Phase, Status -->
               </div>
 
-              <hr class="my-4">
-              <h6 class="fw-bold">Add New Setting</h6>
+              <div class="bg-success bg-opacity-10 p-3 rounded mt-4 mb-2">
+                <h6 class="mb-0 fw-bold text-success">➕ Add New Setting</h6>
+              </div>
               <form id="addSettingForm" class="row g-2 align-items-center">
                 <div class="col-auto">
                   <select id="asKey" class="form-select form-select-sm">
@@ -445,7 +716,7 @@
             <div class="row">
               <div class="col-md-6 mb-3">
                 <label class="form-label fw-bold">Start Date</label>
-                <input type="date" class="form-control" id="pStart">
+                <input type="date" class="form-control" id="pStart" required>
               </div>
               <div class="col-md-6 mb-3">
                 <label class="form-label fw-bold">Deadline</label>
@@ -660,6 +931,19 @@
           <button type="button" class="btn btn-sm btn-info text-white" id="btnAddNoteFromHistory" onclick="openCommentModal(appState.currentProjectId)" title="Add a new note">➕ Add Note</button>
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Notification Modal (Top-most, no crossfade/backdrop) -->
+  <div class="modal" id="notificationModal" tabindex="-1" aria-hidden="true" data-bs-backdrop="false" data-bs-keyboard="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content" id="notificationModalContent">
+        <div class="modal-header" id="notificationModalHeader">
+          <h5 class="modal-title" id="notificationModalTitle">Notification</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body" id="notificationModalBody"></div>
       </div>
     </div>
   </div>
