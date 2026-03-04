@@ -2128,9 +2128,9 @@
                 <span class="text-muted">Owner: ${escapeHtml(a.owner)} • ${a.percentageCompleted}% Complete</span>
              </div>
                  <div class="action-controls d-flex gap-1">
-                     <button class="btn btn-sm btn-outline-primary" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})">Update</button>
-                     <button class="btn btn-sm btn-light border" onclick='openActionHistoryModal(${JSON.stringify(actionData)})'>Logs</button>
-                     ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-outline-danger ms-1" onclick="confirmDeleteAction('${escapeHtml(a.id)}')">Delete</button>` : ''}
+                     <button class="btn btn-sm btn-outline-primary" title="Update Action" onclick="openUpdateModal('${escapeHtml(a.id)}', '${a.status}', ${a.percentageCompleted})"><i class="fas fa-edit"></i></button>
+                     <button class="btn btn-sm btn-light border" title="View Logs" onclick='openActionHistoryModal(${JSON.stringify(actionData)})'><i class="fas fa-history"></i></button>
+                     ${appState.role === 'Admin' ? `<button class="btn btn-sm btn-outline-danger" title="Delete Action" onclick="confirmDeleteAction('${escapeHtml(a.id)}')"><i class="fas fa-trash"></i></button>` : ''}
                  </div>
           </li>
         `;
@@ -3069,12 +3069,28 @@
             });
         }
 
-        new bootstrap.Modal(document.getElementById('historyModal')).show();
+        // Update modal title and show "Add Note" button (for project comments)
+        const modal = document.getElementById('historyModal');
+        const title = modal.querySelector('.modal-title');
+        if (title) title.textContent = 'Project Comment History';
+        
+        const addNoteBtn = document.getElementById('btnAddNoteFromHistory');
+        if (addNoteBtn) addNoteBtn.style.display = 'inline-block';
+
+        new bootstrap.Modal(modal).show();
     }
 
     function openActionHistoryModal(actionData) {
         const { actionId, actionOwner, projectOwner, updates } = actionData;
         const container = document.getElementById("historyTimeline");
+        
+        // Safety check: ensure container exists
+        if (!container) {
+            console.error('History timeline container not found');
+            showAlert('Unable to open history modal', 'warning');
+            return;
+        }
+        
         container.innerHTML = "";
 
         const historyArray = updates || [];
@@ -3114,10 +3130,13 @@
             });
         }
 
-        // Update modal title
+        // Update modal title and hide "Add Note" button (only for project comments)
         const modal = document.getElementById('historyModal');
         const title = modal.querySelector('.modal-title');
         if (title) title.textContent = 'Action Update History';
+        
+        const addNoteBtn = document.getElementById('btnAddNoteFromHistory');
+        if (addNoteBtn) addNoteBtn.style.display = 'none';
 
         new bootstrap.Modal(modal).show();
     }
